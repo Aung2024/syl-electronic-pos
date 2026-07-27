@@ -1,0 +1,77 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return signedIn() && userRole() == "admin";
+    }
+
+    function isSales() {
+      return signedIn() && userRole() == "sales";
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if signedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        isSales() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(["stockQty", "updatedAt"])
+      );
+    }
+
+    match /settings/{settingId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /sales/{saleId} {
+      allow read: if isAdmin();
+      allow create: if signedIn() && (isAdmin() || isSales());
+      allow update, delete: if isAdmin();
+    }
+
+    match /saleItems/{saleItemId} {
+      allow read: if isAdmin();
+      allow create: if signedIn() && (isAdmin() || isSales());
+      allow update, delete: if isAdmin();
+    }
+
+    match /suppliers/{supplierId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /purchases/{purchaseId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /credits/{creditId} {
+      allow read, write: if isAdmin();
+      allow create: if signedIn() && (isAdmin() || isSales());
+    }
+
+    match /creditPayments/{creditPaymentId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /expenses/{expenseId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /expenseCategories/{categoryId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
