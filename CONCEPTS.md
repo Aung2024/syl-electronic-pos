@@ -1,6 +1,6 @@
 # Electronics Shop POS Concepts
 
-This project is a mobile-responsive web POS and business management app for a medium-sized electronics shop. It is deployed as a static frontend on Netlify and uses Firebase Auth + Firestore for backend data.
+This project is a mobile-responsive web POS and business management app for a medium-sized electronics shop. It is deployed as a static frontend on Netlify and uses Supabase (PostgreSQL + Auth + RLS) for backend data.
 
 ## Scope
 
@@ -10,32 +10,25 @@ This project is a mobile-responsive web POS and business management app for a me
 - Purchase / supplier stock-in, credit receivables and payables, expenses, reporting, and thermal receipts are included.
 - Offline mode, Myanmar language UI, multi-branch, SMS, and accounting export are out of scope for v1.
 
-
-
 ## Roles
 
 - Admin: can manage products, pricing, FX, purchases, credits, expenses, reports, and POS.
 - Sales: can use POS, scan products, add/remove cart items, complete sales, and print receipts.
 
-
-
 ## Core Data Model
 
-Firestore collections:
+Supabase tables:
 
-- `users`: user profile and role.
+- `profiles`: user profile and role (linked to `auth.users`).
 - `products`: product catalog and stock.
 - `settings`: app settings such as FX, base FX, rounding, and margin bands.
 - `sales`: sale header records.
-- `saleItems`: individual product rows for each sale.
+- `sale_items`: individual product rows for each sale.
 - `suppliers`: supplier records.
 - `purchases`: purchase / stock-in records.
 - `credits`: receivables and payables.
-- `creditPayments`: partial payment history.
+- `credit_payments`: partial payment history.
 - `expenses`: categorized business expenses.
-- `expenseCategories`: expense category names.
-
-
 
 ## Product Fields
 
@@ -46,9 +39,9 @@ Firestore collections:
 - `unit`: dropdown values such as `pcs`, `ft`, `m`, `roll`, `box`, `set`, `pair`.
 - `cost`: weighted average unit cost across stock batches.
 - `cogs`: weighted average delivery/packing/handling cost per unit across stock batches.
-- `marginPercent`: optional product-specific override.
+- `margin_percent`: optional product-specific override.
 - `price`: computed selling price in MMK.
-- `stockQty`
+- `stock_qty`
 - `active`
 
 ## Stock In From Products Screen
@@ -110,13 +103,11 @@ Rounding is controlled by settings, usually nearest 100 or 1,000 MMK.
 - The client selects the installed thermal printer in the browser print dialog.
 - Printer drivers and hardware setup are outside the app scope.
 
-
-
 ## Deployment Notes
 
-- Add Firebase web app config in `assets/js/firebase-config.js`.
-- Enable Firebase Authentication with email/password.
-- Create user documents in `users` with role `admin` or `sales`.
+- Add Supabase URL and anon key in `assets/js/supabase-config.js`.
+- Run `supabase/schema.sql` in the Supabase SQL Editor.
+- Enable Supabase Authentication with email/password.
+- Create `profiles` rows for each Auth user with role `admin` or `sales`.
 - Deploy the static folder to Netlify.
-- The client pays Firebase, Netlify, domain, and hardware costs separately.
-
+- See `SUPABASE_SETUP.md` for step-by-step setup.

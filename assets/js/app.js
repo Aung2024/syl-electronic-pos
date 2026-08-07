@@ -1,35 +1,62 @@
-import { firebaseConfig, demoUser } from "./firebase-config.js";
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-import {
-  getAuth,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  getFirestore,
-  setDoc
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+import { supabaseConfig, demoUser } from "./supabase-config.js";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
-const COLLECTIONS = [
-  "users",
-  "products",
-  "settings",
-  "sales",
-  "saleItems",
-  "suppliers",
-  "purchases",
-  "credits",
-  "creditPayments",
-  "expenses",
-  "expenseCategories"
-];
+const TABLE_BY_COLLECTION = {
+  users: "profiles",
+  products: "products",
+  settings: "settings",
+  sales: "sales",
+  saleItems: "sale_items",
+  suppliers: "suppliers",
+  purchases: "purchases",
+  credits: "credits",
+  creditPayments: "credit_payments",
+  expenses: "expenses"
+};
+
+const COLLECTIONS = Object.keys(TABLE_BY_COLLECTION);
+
+let supabase = null;
+
+function snakeToCamel(key) {
+  return key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
+function camelToSnake(key) {
+  return key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+function fromDbRow(row) {
+  if (!row) return row;
+  const out = {};
+  for (const [key, value] of Object.entries(row)) {
+    const camelKey = snakeToCamel(key);
+    if (camelKey === "marginPercent" && value === null) {
+      out.marginPercent = "";
+    } else {
+      out[camelKey] = value;
+    }
+  }
+  return out;
+}
+
+function toDbRow(data) {
+  const out = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined) continue;
+    const snakeKey = camelToSnake(key);
+    if (key === "marginPercent" && value === "") {
+      out.margin_percent = null;
+    } else {
+      out[snakeKey] = value;
+    }
+  }
+  return out;
+}
+
+function throwIfError(error) {
+  if (error) throw new Error(error.message);
+}
 
 const DEFAULT_SETTINGS = {
   id: "main",
@@ -46,9 +73,7 @@ const DEFAULT_SETTINGS = {
 
 const state = {
   user: null,
-  isFirebaseReady: !firebaseConfig.apiKey.startsWith("PASTE_"),
-  auth: null,
-  db: null,
+  isSupabaseReady: !supabaseConfig.url.startsWith("PASTE_"),
   settings: DEFAULT_SETTINGS,
   products: [],
   suppliers: [],
@@ -191,62 +216,71 @@ function saveLocalDb(db) {
   localStorage.setItem("electronics-pos-db", JSON.stringify(db));
 }
 
-async function listDocs(name) {
-  if (!state.isFirebaseReady) return localDb()[name] || [];
+async function listDocs(collectionName) {
+  if (!state.isSupabaseReady) return localDb()[collectionName] || [];
 
-  const snapshot = await getDocs(collection(state.db, name));
-  return snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+  const table = TABLE_BY_COLLECTION[collectionName];
+  const { data, error } = await supabase.from(table).select("*");
+  throwIfError(error);
+  return (data || []).map(fromDbRow);
 }
 
-async function saveDoc(name, data) {
-  if (!state.isFirebaseReady) {
+async function saveDoc(collectionName, data) {
+  if (!state.isSupabaseReady) {
     const db = localDb();
-    const collectionRows = db[name] || [];
+    const collectionRows = db[collectionName] || [];
     const record = { ...data, id: data.id || id() };
     const index = collectionRows.findIndex((item) => item.id === record.id);
     if (index >= 0) collectionRows[index] = record;
     else collectionRows.push(record);
-    db[name] = collectionRows;
+    db[collectionName] = collectionRows;
     saveLocalDb(db);
     return record;
   }
 
-  if (data.id) {
-    const ref = doc(state.db, name, data.id);
-    await setDoc(ref, data, { merge: true });
-    return data;
+  const table = TABLE_BY_COLLECTION[collectionName];
+  const row = toDbRow(data);
+  const rowId = row.id;
+  delete row.id;
+
+  if (rowId) {
+    const { data: saved, error } = await supabase
+      .from(table)
+      .upsert({ id: rowId, ...row })
+      .select()
+      .single();
+    throwIfError(error);
+    return fromDbRow(saved);
   }
 
-  const ref = await addDoc(collection(state.db, name), data);
-  return { ...data, id: ref.id };
+  const { data: saved, error } = await supabase.from(table).insert(row).select().single();
+  throwIfError(error);
+  return fromDbRow(saved);
 }
 
-async function removeDoc(name, docId) {
-  if (!state.isFirebaseReady) {
+async function removeDoc(collectionName, docId) {
+  if (!state.isSupabaseReady) {
     const db = localDb();
-    db[name] = (db[name] || []).filter((item) => item.id !== docId);
+    db[collectionName] = (db[collectionName] || []).filter((item) => item.id !== docId);
     saveLocalDb(db);
     return;
   }
 
-  await deleteDoc(doc(state.db, name, docId));
+  const table = TABLE_BY_COLLECTION[collectionName];
+  const { error } = await supabase.from(table).delete().eq("id", docId);
+  throwIfError(error);
 }
 
 async function getUserProfile(user) {
-  if (!state.isFirebaseReady) return demoUser;
+  if (!state.isSupabaseReady) return demoUser;
 
-  const userSnap = await getDoc(doc(state.db, "users", user.uid));
-  if (userSnap.exists()) return { id: user.uid, uid: user.uid, ...userSnap.data() };
+  const { data, error } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+  if (error || !data) {
+    throw new Error("User profile not found. Ask admin to add your profile in Supabase.");
+  }
 
-  const profile = {
-    uid: user.uid,
-    email: user.email,
-    name: user.email,
-    role: "sales",
-    createdAt: nowIso()
-  };
-  await setDoc(doc(state.db, "users", user.uid), profile);
-  return profile;
+  const profile = fromDbRow(data);
+  return { ...profile, uid: profile.id };
 }
 
 function marginFor(product, settings = state.settings) {
@@ -285,7 +319,7 @@ async function loadData() {
   let creditPayments = [];
   let expenses = [];
 
-  if (role === "admin" || !state.isFirebaseReady) {
+  if (role === "admin" || !state.isSupabaseReady) {
     [
       suppliers,
       purchases,
@@ -684,7 +718,7 @@ async function completeSale() {
   const sale = await saveDoc("sales", {
     receiptNo: `S-${Date.now()}`,
     date: nowIso(),
-    userId: state.user.uid,
+    userId: state.user.id || state.user.uid,
     customerName: qs("#customer-name").value.trim(),
     paymentType: qs("#payment-type").value,
     total: cartTotal()
@@ -892,14 +926,15 @@ function printBarcodeLabels() {
   area.innerHTML = state.products.map((product) => `
     <div class="barcode-label">
       <strong>${product.name}</strong>
-      <svg id="barcode-${product.id}"></svg>
+      <svg id="barcode-${String(product.id).replace(/[^a-zA-Z0-9]/g, "")}"></svg>
       <div>${money(product.price)}</div>
     </div>
   `).join("");
   document.body.append(area);
 
   state.products.forEach((product) => {
-    JsBarcode(`#barcode-${product.id}`, product.barcode, {
+    const safeId = String(product.id).replace(/[^a-zA-Z0-9]/g, "");
+    JsBarcode(`#barcode-${safeId}`, product.barcode, {
       format: "CODE128",
       width: 1.4,
       height: 38,
@@ -922,18 +957,17 @@ function bindEvents() {
     qs("#auth-message").textContent = "";
 
     try {
-      if (!state.isFirebaseReady) {
+      if (!state.isSupabaseReady) {
         await new Promise((resolve) => setTimeout(resolve, 600));
         showApp(demoUser);
         return;
       }
 
-      const credential = await signInWithEmailAndPassword(
-        state.auth,
-        qs("#login-email").value,
-        qs("#login-password").value
-      );
-      showApp(await getUserProfile(credential.user));
+      const { error } = await supabase.auth.signInWithPassword({
+        email: qs("#login-email").value,
+        password: qs("#login-password").value
+      });
+      if (error) throw error;
     } catch (error) {
       qs("#auth-message").textContent = error.message;
     } finally {
@@ -942,7 +976,7 @@ function bindEvents() {
   });
 
   qs("#logout-btn").addEventListener("click", async () => {
-    if (state.isFirebaseReady) await signOut(state.auth);
+    if (state.isSupabaseReady) await supabase.auth.signOut();
     location.reload();
   });
 
@@ -1088,24 +1122,26 @@ function bindEvents() {
   qs("#report-period").addEventListener("change", renderReports);
 }
 
-function initFirebase() {
-  if (!state.isFirebaseReady) return;
-  const app = initializeApp(firebaseConfig);
-  state.auth = getAuth(app);
-  state.db = getFirestore(app);
+function initSupabase() {
+  if (!state.isSupabaseReady) return;
+  supabase = createClient(supabaseConfig.url, supabaseConfig.anonKey);
 
-  onAuthStateChanged(state.auth, async (user) => {
-    if (!user) return;
-    showApp(await getUserProfile(user));
+  supabase.auth.onAuthStateChange(async (_event, session) => {
+    if (!session?.user) return;
+    try {
+      showApp(await getUserProfile(session.user));
+    } catch (error) {
+      qs("#auth-message").textContent = error.message;
+    }
   });
 }
 
 function init() {
   bindEvents();
-  initFirebase();
+  initSupabase();
   fillProductForm();
   fillSupplierForm();
-  if (!state.isFirebaseReady) {
+  if (!state.isSupabaseReady) {
     qs("#login-email").value = demoUser.email;
     qs("#login-password").value = "demo";
   }
