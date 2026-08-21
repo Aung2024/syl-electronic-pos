@@ -64,12 +64,38 @@ const DEFAULT_SETTINGS = {
   currentFx: 4500,
   roundTo: 100,
   defaultMargin: 8,
+  lowStockThreshold: 5,
   marginBands: [
     { max: 10000, margin: 10 },
     { max: 100000, margin: 5 },
     { max: null, margin: 4 }
   ]
 };
+
+function lowStockThreshold() {
+  return Number(state.settings.lowStockThreshold ?? DEFAULT_SETTINGS.lowStockThreshold);
+}
+
+function stockStatus(stockQty) {
+  const qty = Number(stockQty || 0);
+  const threshold = lowStockThreshold();
+  if (qty <= threshold) {
+    return { level: "low", label: qty <= 0 ? "Out" : "Low", badgeClass: "text-bg-danger" };
+  }
+  return { level: "healthy", label: "Healthy", badgeClass: "text-bg-success" };
+}
+
+function stockOnHandHtml(stockQty, unit = "") {
+  const qty = Number(stockQty || 0);
+  const status = stockStatus(qty);
+  const unitSuffix = unit ? ` ${unit}` : "";
+  return `
+    <div class="stock-on-hand">
+      <span class="badge ${status.badgeClass}">${status.label}</span>
+      <span class="stock-qty ${status.level === "low" ? "low-stock" : ""}">${qty.toLocaleString()}${unitSuffix}</span>
+    </div>
+  `;
+}
 
 const state = {
   user: null,
@@ -339,7 +365,7 @@ async function loadData() {
     ]);
   }
 
-  state.settings = settings.find((item) => item.id === "main") || DEFAULT_SETTINGS;
+  state.settings = { ...DEFAULT_SETTINGS, ...(settings.find((item) => item.id === "main") || {}) };
   state.products = products.sort((a, b) => a.name.localeCompare(b.name));
   state.suppliers = suppliers.sort((a, b) => a.name.localeCompare(b.name));
   state.purchases = purchases.sort((a, b) => b.date.localeCompare(a.date));
@@ -399,6 +425,7 @@ function renderSettings() {
   qs("#current-fx").value = state.settings.currentFx;
   qs("#round-to").value = state.settings.roundTo;
   qs("#default-margin").value = state.settings.defaultMargin;
+  qs("#low-stock-threshold").value = lowStockThreshold();
   qs("#margin-bands").value = JSON.stringify(state.settings.marginBands || [], null, 2);
 }
 
@@ -454,7 +481,7 @@ function renderProducts() {
       <td><code>${product.sku || "-"}</code></td>
       <td><code>${product.barcode}</code></td>
       <td>${product.type}</td>
-      <td class="text-end ${Number(product.stockQty) <= 3 ? "low-stock" : ""}">${Number(product.stockQty || 0).toLocaleString()}</td>
+      <td class="text-end">${stockOnHandHtml(product.stockQty, product.unit)}</td>
       <td class="text-end">${money(Number(product.cost || 0) + Number(product.cogs || 0))}</td>
       <td class="text-end">${money(product.price)}</td>
       <td class="text-end">
@@ -515,7 +542,7 @@ function fillProductForm(product) {
   qs("#product-margin").value = product?.marginPercent ?? "";
   qs("#product-payment").value = "paid";
   qs("#product-new-supplier").value = "";
-  qs("#display-stock").textContent = Number(product?.stockQty || 0).toLocaleString();
+  qs("#display-stock").innerHTML = stockOnHandHtml(product?.stockQty || 0, product?.unit || qs("#product-unit").value);
   qs("#display-avg-cost").textContent = money(product?.cost || 0);
   qs("#display-avg-cogs").textContent = money(product?.cogs || 0);
   previewGeneratedCodes();
@@ -544,7 +571,7 @@ function updateComputedPrice(existing) {
   const draft = productDraftFromForm(existing || state.products.find((item) => item.id === qs("#product-id").value));
   qs("#display-avg-cost").textContent = money(draft.product.cost);
   qs("#display-avg-cogs").textContent = money(draft.product.cogs);
-  qs("#display-stock").textContent = Number(draft.product.stockQty || 0).toLocaleString();
+  qs("#display-stock").innerHTML = stockOnHandHtml(draft.product.stockQty, draft.product.unit);
   qs("#computed-product-price").textContent = money(draft.product.price);
 }
 
@@ -1023,6 +1050,7 @@ function bindEvents() {
         currentFx: numberValue("#current-fx"),
         roundTo: numberValue("#round-to"),
         defaultMargin: numberValue("#default-margin"),
+        lowStockThreshold: numberValue("#low-stock-threshold"),
         marginBands: JSON.parse(qs("#margin-bands").value),
         updatedAt: nowIso()
       };

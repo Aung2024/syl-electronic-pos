@@ -184,6 +184,19 @@ body {
   font-weight: 700;
 }
 
+.stock-on-hand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.stock-on-hand .stock-qty {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
 @media (max-width: 768px) {
   .page-title {
     align-items: stretch;
