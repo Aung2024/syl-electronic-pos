@@ -590,13 +590,17 @@ function renderInventory() {
       <td>${product.type}</td>
       <td class="text-end">${stockOnHandHtml(product.stockQty, product.unit)}</td>
       <td class="text-end">${money(unitCost)}</td>
+      <td class="text-end">${money(product.price)}</td>
       <td class="text-end">${money(qty * unitCost)}</td>
       <td class="text-end">
-        <button class="btn btn-sm btn-outline-primary" data-restock-product="${product.id}">Restock</button>
+        <div class="d-flex flex-wrap justify-content-end gap-1">
+          <button class="btn btn-sm btn-outline-secondary" data-print-label="${product.id}">Print label</button>
+          <button class="btn btn-sm btn-outline-primary" data-restock-product="${product.id}">Restock</button>
+        </div>
       </td>
     </tr>`;
     }).join("")
-    : `<tr><td colspan="7" class="text-center text-muted py-4">No products match your filters.</td></tr>`;
+    : `<tr><td colspan="8" class="text-center text-muted py-4">No products match your filters.</td></tr>`;
 }
 
 function renderProductSupplierSelect() {
@@ -1050,23 +1054,30 @@ function printReceipt() {
   window.print();
 }
 
-function printBarcodeLabels() {
+function printBarcodeLabelsForProducts(products) {
+  if (!products.length) {
+    showToast("No products to print.");
+    return;
+  }
+
   let area = qs("#label-print-area");
   if (area) area.remove();
 
   area = document.createElement("div");
   area.id = "label-print-area";
   area.className = "barcode-grid";
-  area.innerHTML = state.products.map((product) => `
+  area.innerHTML = products.map((product) => {
+    const safeId = String(product.id).replace(/[^a-zA-Z0-9]/g, "");
+    return `
     <div class="barcode-label">
       <strong>${product.name}</strong>
-      <svg id="barcode-${String(product.id).replace(/[^a-zA-Z0-9]/g, "")}"></svg>
+      <svg id="barcode-${safeId}"></svg>
       <div>${money(product.price)}</div>
-    </div>
-  `).join("");
+    </div>`;
+  }).join("");
   document.body.append(area);
 
-  state.products.forEach((product) => {
+  products.forEach((product) => {
     const safeId = String(product.id).replace(/[^a-zA-Z0-9]/g, "");
     JsBarcode(`#barcode-${safeId}`, product.barcode, {
       format: "CODE128",
@@ -1080,6 +1091,19 @@ function printBarcodeLabels() {
 
   window.print();
   setTimeout(() => area.remove(), 1000);
+}
+
+function printBarcodeLabels() {
+  printBarcodeLabelsForProducts(state.products);
+}
+
+function printProductLabel(productId) {
+  const product = state.products.find((item) => item.id === productId);
+  if (!product) {
+    showToast("Product not found.");
+    return;
+  }
+  printBarcodeLabelsForProducts([product]);
 }
 
 function bindEvents() {
@@ -1259,7 +1283,9 @@ function bindEvents() {
     qs(selector)?.addEventListener("change", renderInventory);
   });
   qs("#inventory-body")?.addEventListener("click", (event) => {
+    const printId = event.target.dataset.printLabel;
     const productId = event.target.dataset.restockProduct;
+    if (printId) printProductLabel(printId);
     if (productId) openProductRestock(productId);
   });
   qs("#build-report").addEventListener("click", renderReports);
