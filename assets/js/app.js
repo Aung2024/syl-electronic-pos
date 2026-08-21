@@ -97,6 +97,66 @@ function stockOnHandHtml(stockQty, unit = "") {
   `;
 }
 
+function landedCost(product) {
+  return Number(product?.cost || 0) + Number(product?.cogs || 0);
+}
+
+function inventoryMetrics() {
+  const threshold = lowStockThreshold();
+  let low = 0;
+  let out = 0;
+  let healthy = 0;
+  let stockValue = 0;
+
+  for (const product of state.products) {
+    const qty = Number(product.stockQty || 0);
+    stockValue += qty * landedCost(product);
+    if (qty <= 0) out += 1;
+    else if (qty <= threshold) low += 1;
+    else healthy += 1;
+  }
+
+  return { total: state.products.length, low, out, healthy, stockValue, threshold };
+}
+
+function getInventoryFilters() {
+  return {
+    search: (qs("#inventory-search")?.value || "").trim().toLowerCase(),
+    status: qs("#inventory-status-filter")?.value || "all",
+    type: qs("#inventory-type-filter")?.value || "all"
+  };
+}
+
+function matchesInventoryFilters(product, filters) {
+  const qty = Number(product.stockQty || 0);
+  const threshold = lowStockThreshold();
+
+  if (filters.type !== "all" && product.type !== filters.type) return false;
+  if (filters.status === "out" && qty > 0) return false;
+  if (filters.status === "low" && (qty <= 0 || qty > threshold)) return false;
+  if (filters.status === "healthy" && qty <= threshold) return false;
+
+  if (filters.search) {
+    const haystack = [product.name, product.sku, product.barcode].join(" ").toLowerCase();
+    if (!haystack.includes(filters.search)) return false;
+  }
+
+  return true;
+}
+
+function inventorySortRank(product) {
+  const qty = Number(product.stockQty || 0);
+  if (qty <= 0) return 0;
+  if (qty <= lowStockThreshold()) return 1;
+  return 2;
+}
+
+function openProductRestock(productId) {
+  location.hash = "#products";
+  showRoute();
+  fillProductForm(state.products.find((product) => product.id === productId));
+}
+
 const state = {
   user: null,
   isSupabaseReady: !supabaseConfig.url.startsWith("PASTE_"),
@@ -381,6 +441,7 @@ async function loadData() {
 function renderAll() {
   renderSettings();
   renderProducts();
+  renderInventory();
   renderProductSupplierSelect();
   renderSuppliersTable();
   renderPurchases();
@@ -490,6 +551,52 @@ function renderProducts() {
       </td>
     </tr>
   `).join("");
+}
+
+function renderInventory() {
+  const metricsEl = qs("#inventory-metrics");
+  const bodyEl = qs("#inventory-body");
+  if (!metricsEl || !bodyEl) return;
+
+  const metrics = inventoryMetrics();
+  metricsEl.innerHTML = [
+    `<div class="col-sm-6 col-xl"><div class="metric"><span>Total products</span><strong>${metrics.total}</strong></div></div>`,
+    `<div class="col-sm-6 col-xl"><div class="metric"><span>Low stock (≤ ${metrics.threshold})</span><strong class="text-danger">${metrics.low}</strong></div></div>`,
+    `<div class="col-sm-6 col-xl"><div class="metric"><span>Out of stock</span><strong class="text-danger">${metrics.out}</strong></div></div>`,
+    `<div class="col-sm-6 col-xl"><div class="metric"><span>Healthy stock</span><strong class="text-success">${metrics.healthy}</strong></div></div>`,
+    `<div class="col-sm-6 col-xl"><div class="metric"><span>Total stock value</span><strong>${money(metrics.stockValue)}</strong></div></div>`
+  ].join("");
+
+  const filters = getInventoryFilters();
+  const products = state.products
+    .filter((product) => matchesInventoryFilters(product, filters))
+    .sort((a, b) => {
+      const rankDiff = inventorySortRank(a) - inventorySortRank(b);
+      if (rankDiff !== 0) return rankDiff;
+      return a.name.localeCompare(b.name);
+    });
+
+  bodyEl.innerHTML = products.length
+    ? products.map((product) => {
+      const qty = Number(product.stockQty || 0);
+      const unitCost = landedCost(product);
+      return `
+    <tr>
+      <td>
+        <strong>${product.name}</strong>
+        <div class="small text-muted">${product.unit}</div>
+      </td>
+      <td><code>${product.sku || "-"}</code></td>
+      <td>${product.type}</td>
+      <td class="text-end">${stockOnHandHtml(product.stockQty, product.unit)}</td>
+      <td class="text-end">${money(unitCost)}</td>
+      <td class="text-end">${money(qty * unitCost)}</td>
+      <td class="text-end">
+        <button class="btn btn-sm btn-outline-primary" data-restock-product="${product.id}">Restock</button>
+      </td>
+    </tr>`;
+    }).join("")
+    : `<tr><td colspan="7" class="text-center text-muted py-4">No products match your filters.</td></tr>`;
 }
 
 function renderProductSupplierSelect() {
@@ -1146,6 +1253,15 @@ function bindEvents() {
   });
 
   qs("#refresh-dashboard").addEventListener("click", loadData);
+  qs("#refresh-inventory")?.addEventListener("click", loadData);
+  ["#inventory-search", "#inventory-status-filter", "#inventory-type-filter"].forEach((selector) => {
+    qs(selector)?.addEventListener("input", renderInventory);
+    qs(selector)?.addEventListener("change", renderInventory);
+  });
+  qs("#inventory-body")?.addEventListener("click", (event) => {
+    const productId = event.target.dataset.restockProduct;
+    if (productId) openProductRestock(productId);
+  });
   qs("#build-report").addEventListener("click", renderReports);
   qs("#report-period").addEventListener("change", renderReports);
 }
