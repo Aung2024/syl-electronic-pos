@@ -64,12 +64,98 @@ const DEFAULT_SETTINGS = {
   currentFx: 4500,
   roundTo: 100,
   defaultMargin: 8,
+  lowStockThreshold: 5,
   marginBands: [
     { max: 10000, margin: 10 },
     { max: 100000, margin: 5 },
     { max: null, margin: 4 }
   ]
 };
+
+function lowStockThreshold() {
+  return Number(state.settings.lowStockThreshold ?? DEFAULT_SETTINGS.lowStockThreshold);
+}
+
+function stockStatus(stockQty) {
+  const qty = Number(stockQty || 0);
+  const threshold = lowStockThreshold();
+  if (qty <= threshold) {
+    return { level: "low", label: qty <= 0 ? "Out" : "Low", badgeClass: "text-bg-danger" };
+  }
+  return { level: "healthy", label: "Healthy", badgeClass: "text-bg-success" };
+}
+
+function stockOnHandHtml(stockQty, unit = "") {
+  const qty = Number(stockQty || 0);
+  const status = stockStatus(qty);
+  const unitSuffix = unit ? ` ${unit}` : "";
+  return `
+    <div class="stock-on-hand">
+      <span class="badge ${status.badgeClass}">${status.label}</span>
+      <span class="stock-qty ${status.level === "low" ? "low-stock" : ""}">${qty.toLocaleString()}${unitSuffix}</span>
+    </div>
+  `;
+}
+
+function landedCost(product) {
+  return Number(product?.cost || 0) + Number(product?.cogs || 0);
+}
+
+function inventoryMetrics() {
+  const threshold = lowStockThreshold();
+  let low = 0;
+  let out = 0;
+  let healthy = 0;
+  let stockValue = 0;
+
+  for (const product of state.products) {
+    const qty = Number(product.stockQty || 0);
+    stockValue += qty * landedCost(product);
+    if (qty <= 0) out += 1;
+    else if (qty <= threshold) low += 1;
+    else healthy += 1;
+  }
+
+  return { total: state.products.length, low, out, healthy, stockValue, threshold };
+}
+
+function getInventoryFilters() {
+  return {
+    search: (qs("#inventory-search")?.value || "").trim().toLowerCase(),
+    status: qs("#inventory-status-filter")?.value || "all",
+    type: qs("#inventory-type-filter")?.value || "all"
+  };
+}
+
+function matchesInventoryFilters(product, filters) {
+  const qty = Number(product.stockQty || 0);
+  const threshold = lowStockThreshold();
+
+  if (filters.type !== "all" && product.type !== filters.type) return false;
+  if (filters.status === "out" && qty > 0) return false;
+  if (filters.status === "low" && (qty <= 0 || qty > threshold)) return false;
+  if (filters.status === "healthy" && qty <= threshold) return false;
+
+  if (filters.search) {
+    const haystack = [product.name, product.sku, product.barcode].join(" ").toLowerCase();
+    if (!haystack.includes(filters.search)) return false;
+  }
+
+  return true;
+}
+
+function inventorySortRank(product) {
+  const qty = Number(product.stockQty || 0);
+  if (qty <= 0) return 0;
+  if (qty <= lowStockThreshold()) return 1;
+  return 2;
+}
+
+function openProductRestock(productId) {
+  location.hash = "#products";
+  showRoute();
+  fillProductForm(state.products.find((product) => product.id === productId));
+}
 
 const state = {
   user: null,
@@ -339,7 +425,7 @@ async function loadData() {
     ]);
   }
 
-  state.settings = settings.find((item) => item.id === "main") || DEFAULT_SETTINGS;
+  state.settings = { ...DEFAULT_SETTINGS, ...(settings.find((item) => item.id === "main") || {}) };
   state.products = products.sort((a, b) => a.name.localeCompare(b.name));
   state.suppliers = suppliers.sort((a, b) => a.name.localeCompare(b.name));
   state.purchases = purchases.sort((a, b) => b.date.localeCompare(a.date));
@@ -355,6 +441,7 @@ async function loadData() {
 function renderAll() {
   renderSettings();
   renderProducts();
+  renderInventory();
   renderProductSupplierSelect();
   renderSuppliersTable();
   renderPurchases();
@@ -399,6 +486,7 @@ function renderSettings() {
   qs("#current-fx").value = state.settings.currentFx;
   qs("#round-to").value = state.settings.roundTo;
   qs("#default-margin").value = state.settings.defaultMargin;
+  qs("#low-stock-threshold").value = lowStockThreshold();
   qs("#margin-bands").value = JSON.stringify(state.settings.marginBands || [], null, 2);
 }
 
@@ -454,7 +542,7 @@ function renderProducts() {
       <td><code>${product.sku || "-"}</code></td>
       <td><code>${product.barcode}</code></td>
       <td>${product.type}</td>
-      <td class="text-end ${Number(product.stockQty) <= 3 ? "low-stock" : ""}">${Number(product.stockQty || 0).toLocaleString()}</td>
+      <td class="text-end">${stockOnHandHtml(product.stockQty, product.unit)}</td>
       <td class="text-end">${money(Number(product.cost || 0) + Number(product.cogs || 0))}</td>
       <td class="text-end">${money(product.price)}</td>
       <td class="text-end">
@@ -463,6 +551,56 @@ function renderProducts() {
       </td>
     </tr>
   `).join("");
+}
+
+function renderInventory() {
+  const metricsEl = qs("#inventory-metrics");
+  const bodyEl = qs("#inventory-body");
+  if (!metricsEl || !bodyEl) return;
+
+  const metrics = inventoryMetrics();
+  metricsEl.innerHTML = [
+    `<div class="col-sm-6 col-xl"><div class="metric"><span>Total products</span><strong>${metrics.total}</strong></div></div>`,
+    `<div class="col-sm-6 col-xl"><div class="metric"><span>Low stock (≤ ${metrics.threshold})</span><strong class="text-danger">${metrics.low}</strong></div></div>`,
+    `<div class="col-sm-6 col-xl"><div class="metric"><span>Out of stock</span><strong class="text-danger">${metrics.out}</strong></div></div>`,
+    `<div class="col-sm-6 col-xl"><div class="metric"><span>Healthy stock</span><strong class="text-success">${metrics.healthy}</strong></div></div>`,
+    `<div class="col-sm-6 col-xl"><div class="metric"><span>Total stock value</span><strong>${money(metrics.stockValue)}</strong></div></div>`
+  ].join("");
+
+  const filters = getInventoryFilters();
+  const products = state.products
+    .filter((product) => matchesInventoryFilters(product, filters))
+    .sort((a, b) => {
+      const rankDiff = inventorySortRank(a) - inventorySortRank(b);
+      if (rankDiff !== 0) return rankDiff;
+      return a.name.localeCompare(b.name);
+    });
+
+  bodyEl.innerHTML = products.length
+    ? products.map((product) => {
+      const qty = Number(product.stockQty || 0);
+      const unitCost = landedCost(product);
+      return `
+    <tr>
+      <td>
+        <strong>${product.name}</strong>
+        <div class="small text-muted">${product.unit}</div>
+      </td>
+      <td><code>${product.sku || "-"}</code></td>
+      <td>${product.type}</td>
+      <td class="text-end">${stockOnHandHtml(product.stockQty, product.unit)}</td>
+      <td class="text-end">${money(unitCost)}</td>
+      <td class="text-end">${money(product.price)}</td>
+      <td class="text-end">${money(qty * unitCost)}</td>
+      <td class="text-end">
+        <div class="d-flex flex-wrap justify-content-end gap-1">
+          <button class="btn btn-sm btn-outline-secondary" data-print-label="${product.id}">Print label</button>
+          <button class="btn btn-sm btn-outline-primary" data-restock-product="${product.id}">Restock</button>
+        </div>
+      </td>
+    </tr>`;
+    }).join("")
+    : `<tr><td colspan="8" class="text-center text-muted py-4">No products match your filters.</td></tr>`;
 }
 
 function renderProductSupplierSelect() {
@@ -515,7 +653,7 @@ function fillProductForm(product) {
   qs("#product-margin").value = product?.marginPercent ?? "";
   qs("#product-payment").value = "paid";
   qs("#product-new-supplier").value = "";
-  qs("#display-stock").textContent = Number(product?.stockQty || 0).toLocaleString();
+  qs("#display-stock").innerHTML = stockOnHandHtml(product?.stockQty || 0, product?.unit || qs("#product-unit").value);
   qs("#display-avg-cost").textContent = money(product?.cost || 0);
   qs("#display-avg-cogs").textContent = money(product?.cogs || 0);
   previewGeneratedCodes();
@@ -544,7 +682,7 @@ function updateComputedPrice(existing) {
   const draft = productDraftFromForm(existing || state.products.find((item) => item.id === qs("#product-id").value));
   qs("#display-avg-cost").textContent = money(draft.product.cost);
   qs("#display-avg-cogs").textContent = money(draft.product.cogs);
-  qs("#display-stock").textContent = Number(draft.product.stockQty || 0).toLocaleString();
+  qs("#display-stock").innerHTML = stockOnHandHtml(draft.product.stockQty, draft.product.unit);
   qs("#computed-product-price").textContent = money(draft.product.price);
 }
 
@@ -916,23 +1054,30 @@ function printReceipt() {
   window.print();
 }
 
-function printBarcodeLabels() {
+function printBarcodeLabelsForProducts(products) {
+  if (!products.length) {
+    showToast("No products to print.");
+    return;
+  }
+
   let area = qs("#label-print-area");
   if (area) area.remove();
 
   area = document.createElement("div");
   area.id = "label-print-area";
   area.className = "barcode-grid";
-  area.innerHTML = state.products.map((product) => `
+  area.innerHTML = products.map((product) => {
+    const safeId = String(product.id).replace(/[^a-zA-Z0-9]/g, "");
+    return `
     <div class="barcode-label">
       <strong>${product.name}</strong>
-      <svg id="barcode-${String(product.id).replace(/[^a-zA-Z0-9]/g, "")}"></svg>
+      <svg id="barcode-${safeId}"></svg>
       <div>${money(product.price)}</div>
-    </div>
-  `).join("");
+    </div>`;
+  }).join("");
   document.body.append(area);
 
-  state.products.forEach((product) => {
+  products.forEach((product) => {
     const safeId = String(product.id).replace(/[^a-zA-Z0-9]/g, "");
     JsBarcode(`#barcode-${safeId}`, product.barcode, {
       format: "CODE128",
@@ -946,6 +1091,19 @@ function printBarcodeLabels() {
 
   window.print();
   setTimeout(() => area.remove(), 1000);
+}
+
+function printBarcodeLabels() {
+  printBarcodeLabelsForProducts(state.products);
+}
+
+function printProductLabel(productId) {
+  const product = state.products.find((item) => item.id === productId);
+  if (!product) {
+    showToast("Product not found.");
+    return;
+  }
+  printBarcodeLabelsForProducts([product]);
 }
 
 function bindEvents() {
@@ -1023,6 +1181,7 @@ function bindEvents() {
         currentFx: numberValue("#current-fx"),
         roundTo: numberValue("#round-to"),
         defaultMargin: numberValue("#default-margin"),
+        lowStockThreshold: numberValue("#low-stock-threshold"),
         marginBands: JSON.parse(qs("#margin-bands").value),
         updatedAt: nowIso()
       };
@@ -1118,6 +1277,17 @@ function bindEvents() {
   });
 
   qs("#refresh-dashboard").addEventListener("click", loadData);
+  qs("#refresh-inventory")?.addEventListener("click", loadData);
+  ["#inventory-search", "#inventory-status-filter", "#inventory-type-filter"].forEach((selector) => {
+    qs(selector)?.addEventListener("input", renderInventory);
+    qs(selector)?.addEventListener("change", renderInventory);
+  });
+  qs("#inventory-body")?.addEventListener("click", (event) => {
+    const printId = event.target.dataset.printLabel;
+    const productId = event.target.dataset.restockProduct;
+    if (printId) printProductLabel(printId);
+    if (productId) openProductRestock(productId);
+  });
   qs("#build-report").addEventListener("click", renderReports);
   qs("#report-period").addEventListener("change", renderReports);
 }

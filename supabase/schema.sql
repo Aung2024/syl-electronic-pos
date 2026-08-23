@@ -15,11 +15,15 @@ create table if not exists settings (
   current_fx numeric default 4500,
   round_to numeric default 100,
   default_margin numeric default 8,
+  low_stock_threshold numeric default 5,
   margin_bands jsonb default '[{"max":10000,"margin":10},{"max":100000,"margin":5},{"max":null,"margin":4}]'::jsonb,
   updated_at timestamptz default now()
 );
 
 insert into settings (id) values ('main') on conflict (id) do nothing;
+
+-- Migration: add low stock threshold to existing deployments
+alter table settings add column if not exists low_stock_threshold numeric default 5;
 
 create table if not exists suppliers (
   id uuid primary key default gen_random_uuid(),
