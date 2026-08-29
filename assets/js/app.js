@@ -11,7 +11,9 @@ const TABLE_BY_COLLECTION = {
   purchases: "purchases",
   credits: "credits",
   creditPayments: "credit_payments",
-  expenses: "expenses"
+  expenses: "expenses",
+  stockDamages: "stock_damages",
+  stockReturns: "stock_returns"
 };
 
 const COLLECTIONS = Object.keys(TABLE_BY_COLLECTION);
@@ -101,6 +103,78 @@ function landedCost(product) {
   return Number(product?.cost || 0) + Number(product?.cogs || 0);
 }
 
+function isValidProductImageUrl(url) {
+  if (!url) return false;
+  return url.startsWith("data:image/") || url.startsWith("http://") || url.startsWith("https://");
+}
+
+function productImageHtml(imageUrl, alt = "Product", className = "product-thumb") {
+  if (!isValidProductImageUrl(imageUrl)) {
+    return `<div class="${className} product-thumb-empty">No image</div>`;
+  }
+  const safeAlt = String(alt || "Product").replace(/"/g, "&quot;");
+  return `<img src="${imageUrl}" alt="${safeAlt}" class="${className}" loading="lazy">`;
+}
+
+function setProductImagePreview(imageUrl) {
+  qs("#product-image-url").value = isValidProductImageUrl(imageUrl) ? imageUrl : "";
+  qs("#product-image-preview").innerHTML = productImageHtml(
+    qs("#product-image-url").value,
+    qs("#product-name").value.trim() || "Product",
+    "product-image-preview-img"
+  );
+  qs("#clear-product-image").classList.toggle("d-none", !qs("#product-image-url").value);
+}
+
+function clearProductImage() {
+  qs("#product-image").value = "";
+  setProductImagePreview("");
+}
+
+function resizeImageFile(file, maxWidth = 400, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxWidth / img.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = () => reject(new Error("Could not load image."));
+      img.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error("Could not read image file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleProductImageChange(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  if (!file.type.startsWith("image/")) {
+    showToast("Please choose an image file.");
+    event.target.value = "";
+    return;
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    showToast("Image must be under 2 MB.");
+    event.target.value = "";
+    return;
+  }
+
+  try {
+    setProductImagePreview(await resizeImageFile(file));
+  } catch (error) {
+    showToast(error.message || "Could not process image.");
+    event.target.value = "";
+  }
+}
+
 function inventoryMetrics() {
   const threshold = lowStockThreshold();
   let low = 0;
@@ -157,6 +231,319 @@ function openProductRestock(productId) {
   fillProductForm(state.products.find((product) => product.id === productId));
 }
 
+function setDamageModalMode(mode, record = null) {
+  const isEdit = mode === "edit";
+  qs("#damage-record-id").value = isEdit ? record.id : "";
+  qs("#damage-product-modal-label").textContent = isEdit ? "Edit damage record" : "Record damaged stock";
+  qs("#damage-submit-btn").textContent = isEdit ? "Save changes" : "Record damage";
+}
+
+function openDamageModal(productId) {
+  const product = state.products.find((item) => item.id === productId);
+  if (!product) {
+    showToast("Product not found.");
+    return;
+  }
+
+  const stockQty = Number(product.stockQty || 0);
+  if (stockQty <= 0) {
+    showToast("No stock available to mark as damaged.");
+    return;
+  }
+
+  setDamageModalMode("create");
+  qs("#damage-product-id").value = product.id;
+  qs("#damage-product-name").textContent = product.name;
+  qs("#damage-available-stock").textContent = `${stockQty.toLocaleString()} ${product.unit}`;
+  qs("#damage-qty").value = 1;
+  qs("#damage-qty").max = stockQty;
+  qs("#damage-note").value = "";
+  bootstrap.Modal.getOrCreateInstance(qs("#damage-product-modal")).show();
+}
+
+function openDamageEditModal(recordId) {
+  const record = state.stockDamages.find((item) => item.id === recordId);
+  const product = state.products.find((item) => item.id === record?.productId);
+  if (!record || !product) {
+    showToast("Damage record not found.");
+    return;
+  }
+
+  const stockQty = Number(product.stockQty || 0);
+  setDamageModalMode("edit", record);
+  qs("#damage-product-id").value = product.id;
+  qs("#damage-product-name").textContent = product.name;
+  qs("#damage-available-stock").textContent = `${stockQty.toLocaleString()} ${product.unit}`;
+  qs("#damage-qty").value = Number(record.qty || 1);
+  qs("#damage-qty").max = stockQty + Number(record.qty || 0);
+  qs("#damage-note").value = record.note || "";
+  bootstrap.Modal.getOrCreateInstance(qs("#damage-product-modal")).show();
+}
+
+async function recordProductDamage(event) {
+  event.preventDefault();
+
+  const recordId = qs("#damage-record-id").value;
+  const productId = qs("#damage-product-id").value;
+  const product = state.products.find((item) => item.id === productId);
+  const qty = numberValue("#damage-qty");
+  const note = qs("#damage-note").value.trim();
+  const stockQty = Number(product?.stockQty || 0);
+
+  if (!product) {
+    showToast("Product not found.");
+    return;
+  }
+  if (qty <= 0) {
+    showToast("Enter a valid damage qty.");
+    return;
+  }
+
+  const unitCost = landedCost(product);
+
+  if (recordId) {
+    const record = state.stockDamages.find((item) => item.id === recordId);
+    if (!record) {
+      showToast("Damage record not found.");
+      return;
+    }
+
+    const oldQty = Number(record.qty || 0);
+    const delta = qty - oldQty;
+    if (delta > 0 && delta > stockQty) {
+      showToast("Damage qty exceeds available stock.");
+      return;
+    }
+
+    await saveDoc("stockDamages", {
+      ...record,
+      qty,
+      unit: product.unit,
+      unitCost,
+      lossValue: qty * unitCost,
+      note
+    });
+
+    await saveDoc("products", {
+      ...product,
+      stockQty: stockQty - delta,
+      updatedAt: nowIso()
+    });
+
+    bootstrap.Modal.getInstance(qs("#damage-product-modal"))?.hide();
+    await loadData();
+    showToast("Damage record updated.");
+    return;
+  }
+
+  if (qty > stockQty) {
+    showToast("Damage qty exceeds in-stock amount.");
+    return;
+  }
+
+  await saveDoc("stockDamages", {
+    date: nowIso(),
+    productId: product.id,
+    productName: product.name,
+    sku: product.sku,
+    qty,
+    unit: product.unit,
+    unitCost,
+    lossValue: qty * unitCost,
+    note,
+    userId: state.user?.id || state.user?.uid
+  });
+
+  await saveDoc("products", {
+    ...product,
+    stockQty: stockQty - qty,
+    updatedAt: nowIso()
+  });
+
+  bootstrap.Modal.getInstance(qs("#damage-product-modal"))?.hide();
+  await loadData();
+  showToast(`${qty.toLocaleString()} ${product.unit} marked as damaged.`);
+}
+
+async function deleteDamageRecord(recordId) {
+  const record = state.stockDamages.find((item) => item.id === recordId);
+  if (!record) {
+    showToast("Damage record not found.");
+    return;
+  }
+
+  if (!confirm(`Delete damage record for ${record.productName}?`)) return;
+
+  const product = state.products.find((item) => item.id === record.productId);
+  if (product) {
+    await saveDoc("products", {
+      ...product,
+      stockQty: Number(product.stockQty || 0) + Number(record.qty || 0),
+      updatedAt: nowIso()
+    });
+  }
+
+  await removeDoc("stockDamages", recordId);
+  await loadData();
+  showToast("Damage record deleted.");
+}
+
+function setReturnModalMode(mode, record = null) {
+  const isEdit = mode === "edit";
+  qs("#return-record-id").value = isEdit ? record.id : "";
+  qs("#return-product-modal-label").textContent = isEdit ? "Edit return record" : "Record product return";
+  qs("#return-submit-btn").textContent = isEdit ? "Save changes" : "Record return";
+}
+
+function openReturnModal(productId) {
+  const product = state.products.find((item) => item.id === productId);
+  if (!product) {
+    showToast("Product not found.");
+    return;
+  }
+
+  setReturnModalMode("create");
+  qs("#return-product-id").value = product.id;
+  qs("#return-product-name").textContent = product.name;
+  qs("#return-current-stock").textContent = `${Number(product.stockQty || 0).toLocaleString()} ${product.unit}`;
+  qs("#return-qty").value = 1;
+  qs("#return-customer").value = "";
+  qs("#return-note").value = "";
+  bootstrap.Modal.getOrCreateInstance(qs("#return-product-modal")).show();
+}
+
+function openReturnEditModal(recordId) {
+  const record = state.stockReturns.find((item) => item.id === recordId);
+  const product = state.products.find((item) => item.id === record?.productId);
+  if (!record || !product) {
+    showToast("Return record not found.");
+    return;
+  }
+
+  setReturnModalMode("edit", record);
+  qs("#return-product-id").value = product.id;
+  qs("#return-product-name").textContent = product.name;
+  qs("#return-current-stock").textContent = `${Number(product.stockQty || 0).toLocaleString()} ${product.unit}`;
+  qs("#return-qty").value = Number(record.qty || 1);
+  qs("#return-customer").value = record.customerName || "";
+  qs("#return-note").value = record.note || "";
+  bootstrap.Modal.getOrCreateInstance(qs("#return-product-modal")).show();
+}
+
+async function recordProductReturn(event) {
+  event.preventDefault();
+
+  const recordId = qs("#return-record-id").value;
+  const productId = qs("#return-product-id").value;
+  const product = state.products.find((item) => item.id === productId);
+  const qty = numberValue("#return-qty");
+  const customerName = qs("#return-customer").value.trim();
+  const note = qs("#return-note").value.trim();
+  const stockQty = Number(product?.stockQty || 0);
+
+  if (!product) {
+    showToast("Product not found.");
+    return;
+  }
+  if (qty <= 0) {
+    showToast("Enter a valid return qty.");
+    return;
+  }
+
+  const unitCost = landedCost(product);
+  const refundValue = qty * Number(product.price || 0);
+
+  if (recordId) {
+    const record = state.stockReturns.find((item) => item.id === recordId);
+    if (!record) {
+      showToast("Return record not found.");
+      return;
+    }
+
+    const oldQty = Number(record.qty || 0);
+    const delta = qty - oldQty;
+    if (delta < 0 && Math.abs(delta) > stockQty) {
+      showToast("Cannot reduce return below available stock.");
+      return;
+    }
+
+    await saveDoc("stockReturns", {
+      ...record,
+      qty,
+      unit: product.unit,
+      unitCost,
+      refundValue,
+      customerName,
+      note
+    });
+
+    await saveDoc("products", {
+      ...product,
+      stockQty: stockQty + delta,
+      updatedAt: nowIso()
+    });
+
+    bootstrap.Modal.getInstance(qs("#return-product-modal"))?.hide();
+    await loadData();
+    showToast("Return record updated.");
+    return;
+  }
+
+  await saveDoc("stockReturns", {
+    date: nowIso(),
+    productId: product.id,
+    productName: product.name,
+    sku: product.sku,
+    qty,
+    unit: product.unit,
+    unitCost,
+    refundValue,
+    customerName,
+    note,
+    userId: state.user?.id || state.user?.uid
+  });
+
+  await saveDoc("products", {
+    ...product,
+    stockQty: stockQty + qty,
+    updatedAt: nowIso()
+  });
+
+  bootstrap.Modal.getInstance(qs("#return-product-modal"))?.hide();
+  await loadData();
+  showToast(`${qty.toLocaleString()} ${product.unit} returned to stock.`);
+}
+
+async function deleteReturnRecord(recordId) {
+  const record = state.stockReturns.find((item) => item.id === recordId);
+  if (!record) {
+    showToast("Return record not found.");
+    return;
+  }
+
+  if (!confirm(`Delete return record for ${record.productName}?`)) return;
+
+  const product = state.products.find((item) => item.id === record.productId);
+  const returnQty = Number(record.qty || 0);
+  if (product) {
+    const stockQty = Number(product.stockQty || 0);
+    if (returnQty > stockQty) {
+      showToast("Not enough stock to reverse this return.");
+      return;
+    }
+
+    await saveDoc("products", {
+      ...product,
+      stockQty: stockQty - returnQty,
+      updatedAt: nowIso()
+    });
+  }
+
+  await removeDoc("stockReturns", recordId);
+  await loadData();
+  showToast("Return record deleted.");
+}
+
 const state = {
   user: null,
   isSupabaseReady: !supabaseConfig.url.startsWith("PASTE_"),
@@ -169,6 +556,8 @@ const state = {
   credits: [],
   creditPayments: [],
   expenses: [],
+  stockDamages: [],
+  stockReturns: [],
   cart: [],
   lastReceipt: null
 };
@@ -404,6 +793,8 @@ async function loadData() {
   let credits = [];
   let creditPayments = [];
   let expenses = [];
+  let stockDamages = [];
+  let stockReturns = [];
 
   if (role === "admin" || !state.isSupabaseReady) {
     [
@@ -413,7 +804,9 @@ async function loadData() {
       saleItems,
       credits,
       creditPayments,
-      expenses
+      expenses,
+      stockDamages,
+      stockReturns
     ] = await Promise.all([
       listDocs("suppliers"),
       listDocs("purchases"),
@@ -421,7 +814,9 @@ async function loadData() {
       listDocs("saleItems"),
       listDocs("credits"),
       listDocs("creditPayments"),
-      listDocs("expenses")
+      listDocs("expenses"),
+      listDocs("stockDamages"),
+      listDocs("stockReturns")
     ]);
   }
 
@@ -434,6 +829,8 @@ async function loadData() {
   state.credits = credits.sort((a, b) => b.date.localeCompare(a.date));
   state.creditPayments = creditPayments;
   state.expenses = expenses.sort((a, b) => b.date.localeCompare(a.date));
+  state.stockDamages = stockDamages.sort((a, b) => b.date.localeCompare(a.date));
+  state.stockReturns = stockReturns.sort((a, b) => b.date.localeCompare(a.date));
 
   renderAll();
 }
@@ -505,6 +902,7 @@ function productDraftFromForm(existing) {
     sku: isEdit ? existing.sku : (qs("#product-sku").value.trim() || generateSku(qs("#product-type").value, qs("#product-name").value.trim())),
     barcode: isEdit ? existing.barcode : (qs("#product-barcode").value.trim() || generateBarcode()),
     marginPercent: qs("#product-margin").value === "" ? "" : numberValue("#product-margin"),
+    imageUrl: qs("#product-image-url").value || existing?.imageUrl || "",
     active: true,
     updatedAt: nowIso()
   };
@@ -535,6 +933,7 @@ function renderProducts() {
   const body = qs("#products-body");
   body.innerHTML = state.products.map((product) => `
     <tr>
+      <td class="product-image-cell">${productImageHtml(product.imageUrl, product.name)}</td>
       <td>
         <strong>${product.name}</strong>
         <div class="small text-muted">${product.unit}</div>
@@ -546,8 +945,11 @@ function renderProducts() {
       <td class="text-end">${money(Number(product.cost || 0) + Number(product.cogs || 0))}</td>
       <td class="text-end">${money(product.price)}</td>
       <td class="text-end">
-        <button class="btn btn-sm btn-outline-primary" data-edit-product="${product.id}">Restock</button>
-        <button class="btn btn-sm btn-outline-danger" data-delete-product="${product.id}">Delete</button>
+        <div class="d-flex flex-wrap justify-content-end gap-1">
+          <button class="btn btn-sm btn-outline-secondary" data-print-label="${product.id}">Print label</button>
+          <button class="btn btn-sm btn-outline-primary" data-edit-product="${product.id}">Restock</button>
+          <button class="btn btn-sm btn-outline-danger" data-delete-product="${product.id}">Delete</button>
+        </div>
       </td>
     </tr>
   `).join("");
@@ -582,6 +984,7 @@ function renderInventory() {
       const unitCost = landedCost(product);
       return `
     <tr>
+      <td class="product-image-cell">${productImageHtml(product.imageUrl, product.name)}</td>
       <td>
         <strong>${product.name}</strong>
         <div class="small text-muted">${product.unit}</div>
@@ -595,12 +998,64 @@ function renderInventory() {
       <td class="text-end">
         <div class="d-flex flex-wrap justify-content-end gap-1">
           <button class="btn btn-sm btn-outline-secondary" data-print-label="${product.id}">Print label</button>
+          <button class="btn btn-sm btn-outline-success" data-return-product="${product.id}">Return</button>
+          <button class="btn btn-sm btn-outline-danger" data-damage-product="${product.id}" ${qty <= 0 ? "disabled" : ""}>Damage</button>
           <button class="btn btn-sm btn-outline-primary" data-restock-product="${product.id}">Restock</button>
         </div>
       </td>
     </tr>`;
     }).join("")
-    : `<tr><td colspan="8" class="text-center text-muted py-4">No products match your filters.</td></tr>`;
+    : `<tr><td colspan="9" class="text-center text-muted py-4">No products match your filters.</td></tr>`;
+
+  renderDamageLog();
+  renderReturnLog();
+}
+
+function renderReturnLog() {
+  const bodyEl = qs("#return-log-body");
+  if (!bodyEl) return;
+
+  bodyEl.innerHTML = state.stockReturns.length
+    ? state.stockReturns.slice(0, 100).map((row) => `
+    <tr>
+      <td>${new Date(row.date).toLocaleDateString()}</td>
+      <td>${row.productName}</td>
+      <td><code>${row.sku || "-"}</code></td>
+      <td class="text-end">${Number(row.qty || 0).toLocaleString()} ${row.unit || ""}</td>
+      <td class="text-end">${money(row.refundValue)}</td>
+      <td>${row.customerName || "-"}</td>
+      <td>${row.note || "-"}</td>
+      <td class="text-end">
+        <div class="d-flex flex-wrap justify-content-end gap-1">
+          <button class="btn btn-sm btn-outline-primary" data-edit-return="${row.id}">Edit</button>
+          <button class="btn btn-sm btn-outline-danger" data-delete-return="${row.id}">Delete</button>
+        </div>
+      </td>
+    </tr>`).join("")
+    : `<tr><td colspan="8" class="text-center text-muted py-3">No return records yet.</td></tr>`;
+}
+
+function renderDamageLog() {
+  const bodyEl = qs("#damage-log-body");
+  if (!bodyEl) return;
+
+  bodyEl.innerHTML = state.stockDamages.length
+    ? state.stockDamages.slice(0, 100).map((row) => `
+    <tr>
+      <td>${new Date(row.date).toLocaleDateString()}</td>
+      <td>${row.productName}</td>
+      <td><code>${row.sku || "-"}</code></td>
+      <td class="text-end">${Number(row.qty || 0).toLocaleString()} ${row.unit || ""}</td>
+      <td class="text-end">${money(row.lossValue)}</td>
+      <td>${row.note || "-"}</td>
+      <td class="text-end">
+        <div class="d-flex flex-wrap justify-content-end gap-1">
+          <button class="btn btn-sm btn-outline-primary" data-edit-damage="${row.id}">Edit</button>
+          <button class="btn btn-sm btn-outline-danger" data-delete-damage="${row.id}">Delete</button>
+        </div>
+      </td>
+    </tr>`).join("")
+    : `<tr><td colspan="7" class="text-center text-muted py-3">No damage records yet.</td></tr>`;
 }
 
 function renderProductSupplierSelect() {
@@ -653,6 +1108,8 @@ function fillProductForm(product) {
   qs("#product-margin").value = product?.marginPercent ?? "";
   qs("#product-payment").value = "paid";
   qs("#product-new-supplier").value = "";
+  qs("#product-image").value = "";
+  setProductImagePreview(product?.imageUrl || "");
   qs("#display-stock").innerHTML = stockOnHandHtml(product?.stockQty || 0, product?.unit || qs("#product-unit").value);
   qs("#display-avg-cost").textContent = money(product?.cost || 0);
   qs("#display-avg-cogs").textContent = money(product?.cogs || 0);
@@ -1028,8 +1485,230 @@ function renderDashboard() {
   ].join("");
 }
 
+function reportPeriodLabel(period) {
+  if (period === "year") return "This year";
+  if (period === "all") return "All time";
+  return "This month";
+}
+
+function getReportPeriod() {
+  return qs("#report-period")?.value || "month";
+}
+
+function buildDetailedReport(period = "month") {
+  const summary = reportData(period);
+  const sales = filterByPeriod(state.sales, period);
+  const purchases = filterByPeriod(state.purchases, period);
+  const expenses = filterByPeriod(state.expenses, period);
+  const saleIds = new Set(sales.map((sale) => sale.id));
+  const saleItems = state.saleItems.filter((item) => saleIds.has(item.saleId));
+  const salesById = Object.fromEntries(sales.map((sale) => [sale.id, sale]));
+
+  return {
+    period,
+    periodLabel: reportPeriodLabel(period),
+    generatedAt: new Date().toLocaleString(),
+    summary,
+    sales,
+    saleItems,
+    salesById,
+    purchases,
+    expenses,
+    credits: state.credits
+  };
+}
+
+function reportTable(title, headers, rows, emptyText = "No records for this period.") {
+  const head = `<tr>${headers.map((header) => `<th>${header}</th>`).join("")}</tr>`;
+  const body = rows.length
+    ? rows.map((cells) => `<tr>${cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")
+    : `<tr><td colspan="${headers.length}" class="text-center text-muted py-3">${emptyText}</td></tr>`;
+
+  return `
+    <div class="panel mb-4">
+      <h3 class="h5 mb-3">${title}</h3>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>${head}</thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function renderReportDetails(report) {
+  const detailEl = qs("#reports-detail");
+  if (!detailEl) return;
+
+  const saleRows = report.sales.map((sale) => [
+    new Date(sale.date).toLocaleDateString(),
+    sale.receiptNo || "-",
+    sale.customerName || "-",
+    sale.paymentType || "-",
+    `<span class="text-end d-block">${money(sale.total)}</span>`
+  ]);
+
+  const saleItemRows = report.saleItems.map((item) => {
+    const sale = report.salesById[item.saleId];
+    return [
+      new Date(item.date || sale?.date).toLocaleDateString(),
+      sale?.receiptNo || "-",
+      item.name,
+      Number(item.qty || 0).toLocaleString(),
+      `<span class="text-end d-block">${money(item.price)}</span>`,
+      `<span class="text-end d-block">${money(item.lineTotal)}</span>`
+    ];
+  });
+
+  const purchaseRows = report.purchases.map((purchase) => [
+    new Date(purchase.date).toLocaleDateString(),
+    purchase.supplierName || "-",
+    purchase.productName || "-",
+    `<span class="text-end d-block">${Number(purchase.qty || 0).toLocaleString()}</span>`,
+    `<span class="text-end d-block">${money(purchase.total)}</span>`,
+    purchase.paymentStatus || "-"
+  ]);
+
+  const expenseRows = report.expenses.map((expense) => [
+    new Date(expense.date).toLocaleDateString(),
+    expense.category,
+    expense.note || "-",
+    `<span class="text-end d-block">${money(expense.amount)}</span>`
+  ]);
+
+  const creditRows = report.credits.map((credit) => [
+    credit.type,
+    credit.partyName || "-",
+    `<span class="text-end d-block">${money(credit.amount)}</span>`,
+    `<span class="text-end d-block">${money(credit.paidAmount)}</span>`,
+    `<span class="text-end d-block">${money(Number(credit.amount || 0) - Number(credit.paidAmount || 0))}</span>`,
+    credit.status
+  ]);
+
+  detailEl.innerHTML = `
+    <div class="mb-3 small text-muted">Detailed report for ${report.periodLabel}. Generated ${report.generatedAt}.</div>
+    ${reportTable("Sales", ["Date", "Receipt", "Customer", "Payment", "Total"], saleRows)}
+    ${reportTable("Sale items", ["Date", "Receipt", "Product", "Qty", "Price", "Line total"], saleItemRows)}
+    ${reportTable("Purchases", ["Date", "Supplier", "Product", "Qty", "Total", "Payment"], purchaseRows)}
+    ${reportTable("Expenses", ["Date", "Category", "Note", "Amount"], expenseRows)}
+    ${reportTable("Credit", ["Type", "Party", "Amount", "Paid", "Balance", "Status"], creditRows, "No credit records.")}
+  `;
+}
+
+function excelMoney(value) {
+  return Number(value || 0);
+}
+
+function appendExcelSheet(workbook, XLSX, name, rows) {
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  XLSX.utils.book_append_sheet(workbook, sheet, name.slice(0, 31));
+}
+
+async function exportReportExcel() {
+  const report = buildDetailedReport(getReportPeriod());
+
+  try {
+    const XLSX = await import("https://esm.sh/xlsx@0.18.5");
+    const workbook = XLSX.utils.book_new();
+
+    appendExcelSheet(workbook, XLSX, "Summary", [
+      ["Electronics Shop POS Report"],
+      ["Period", report.periodLabel],
+      ["Generated", report.generatedAt],
+      [],
+      ["Metric", "Amount (MMK)"],
+      ["Sales total", excelMoney(report.summary.salesTotal)],
+      ["Purchase total", excelMoney(report.summary.purchaseTotal)],
+      ["Expense total", excelMoney(report.summary.expenseTotal)],
+      ["Receivable balance", excelMoney(report.summary.receivableTotal)],
+      ["Payable balance", excelMoney(report.summary.payableTotal)],
+      ["Stock value", excelMoney(report.summary.stockValue)],
+      ["Cash flow", excelMoney(report.summary.cashFlow)],
+      [],
+      ["Sales count", report.sales.length],
+      ["Sale items count", report.saleItems.length],
+      ["Purchases count", report.purchases.length],
+      ["Expenses count", report.expenses.length]
+    ]);
+
+    appendExcelSheet(workbook, XLSX, "Sales", [
+      ["Date", "Receipt", "Customer", "Payment", "Total (MMK)"],
+      ...report.sales.map((sale) => [
+        new Date(sale.date).toLocaleDateString(),
+        sale.receiptNo || "",
+        sale.customerName || "",
+        sale.paymentType || "",
+        excelMoney(sale.total)
+      ])
+    ]);
+
+    appendExcelSheet(workbook, XLSX, "Sale Items", [
+      ["Date", "Receipt", "Product", "Barcode", "Unit", "Qty", "Price (MMK)", "Line total (MMK)"],
+      ...report.saleItems.map((item) => {
+        const sale = report.salesById[item.saleId];
+        return [
+          new Date(item.date || sale?.date).toLocaleDateString(),
+          sale?.receiptNo || "",
+          item.name || "",
+          item.barcode || "",
+          item.unit || "",
+          Number(item.qty || 0),
+          excelMoney(item.price),
+          excelMoney(item.lineTotal)
+        ];
+      })
+    ]);
+
+    appendExcelSheet(workbook, XLSX, "Purchases", [
+      ["Date", "Supplier", "Product", "Qty", "Unit cost (MMK)", "Batch COGS (MMK)", "Total (MMK)", "Payment"],
+      ...report.purchases.map((purchase) => [
+        new Date(purchase.date).toLocaleDateString(),
+        purchase.supplierName || "",
+        purchase.productName || "",
+        Number(purchase.qty || 0),
+        excelMoney(purchase.unitCost),
+        excelMoney(purchase.batchCogs),
+        excelMoney(purchase.total),
+        purchase.paymentStatus || ""
+      ])
+    ]);
+
+    appendExcelSheet(workbook, XLSX, "Expenses", [
+      ["Date", "Category", "Note", "Amount (MMK)"],
+      ...report.expenses.map((expense) => [
+        new Date(expense.date).toLocaleDateString(),
+        expense.category || "",
+        expense.note || "",
+        excelMoney(expense.amount)
+      ])
+    ]);
+
+    appendExcelSheet(workbook, XLSX, "Credit", [
+      ["Type", "Party", "Amount (MMK)", "Paid (MMK)", "Balance (MMK)", "Status", "Date"],
+      ...report.credits.map((credit) => [
+        credit.type || "",
+        credit.partyName || "",
+        excelMoney(credit.amount),
+        excelMoney(credit.paidAmount),
+        excelMoney(Number(credit.amount || 0) - Number(credit.paidAmount || 0)),
+        credit.status || "",
+        new Date(credit.date).toLocaleDateString()
+      ])
+    ]);
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(workbook, `pos-report-${report.period}-${stamp}.xlsx`);
+    showToast("Report exported to Excel.");
+  } catch (error) {
+    showToast(`Export failed: ${error.message}`);
+  }
+}
+
 function renderReports() {
-  const data = reportData(qs("#report-period")?.value || "month");
+  const period = getReportPeriod();
+  const report = buildDetailedReport(period);
+  const data = report.summary;
+
   qs("#reports-output").innerHTML = [
     metricCard("Sales report", data.salesTotal),
     metricCard("Purchase report", data.purchaseTotal),
@@ -1037,8 +1716,11 @@ function renderReports() {
     metricCard("Credit to receive", data.receivableTotal),
     metricCard("Credit to pay", data.payableTotal),
     metricCard("Expenses report", data.expenseTotal),
-    metricCard("Cash flow", data.cashFlow)
+    metricCard("Cash flow", data.cashFlow),
+    `<div class="col-sm-6 col-xl-3"><div class="metric"><span>Sales count</span><strong>${report.sales.length}</strong></div></div>`
   ].join("");
+
+  renderReportDetails(report);
 }
 
 function printReceipt() {
@@ -1158,12 +1840,16 @@ function bindEvents() {
   qs("#product-supplier").addEventListener("change", toggleNewSupplierField);
 
   qs("#product-form").addEventListener("submit", saveProduct);
+  qs("#product-image").addEventListener("change", handleProductImageChange);
+  qs("#clear-product-image").addEventListener("click", clearProductImage);
 
   qs("#reset-product-form").addEventListener("click", () => fillProductForm());
 
   qs("#products-body").addEventListener("click", async (event) => {
+    const printId = event.target.dataset.printLabel;
     const editId = event.target.dataset.editProduct;
     const deleteId = event.target.dataset.deleteProduct;
+    if (printId) printProductLabel(printId);
     if (editId) fillProductForm(state.products.find((product) => product.id === editId));
     if (deleteId && confirm("Delete this product?")) {
       await removeDoc("products", deleteId);
@@ -1284,11 +1970,30 @@ function bindEvents() {
   });
   qs("#inventory-body")?.addEventListener("click", (event) => {
     const printId = event.target.dataset.printLabel;
+    const returnId = event.target.dataset.returnProduct;
+    const damageId = event.target.dataset.damageProduct;
     const productId = event.target.dataset.restockProduct;
     if (printId) printProductLabel(printId);
+    if (returnId) openReturnModal(returnId);
+    if (damageId) openDamageModal(damageId);
     if (productId) openProductRestock(productId);
   });
+  qs("#damage-product-form")?.addEventListener("submit", recordProductDamage);
+  qs("#return-product-form")?.addEventListener("submit", recordProductReturn);
+  qs("#return-log-body")?.addEventListener("click", (event) => {
+    const editId = event.target.dataset.editReturn;
+    const deleteId = event.target.dataset.deleteReturn;
+    if (editId) openReturnEditModal(editId);
+    if (deleteId) deleteReturnRecord(deleteId);
+  });
+  qs("#damage-log-body")?.addEventListener("click", (event) => {
+    const editId = event.target.dataset.editDamage;
+    const deleteId = event.target.dataset.deleteDamage;
+    if (editId) openDamageEditModal(editId);
+    if (deleteId) deleteDamageRecord(deleteId);
+  });
   qs("#build-report").addEventListener("click", renderReports);
+  qs("#export-report-excel").addEventListener("click", exportReportExcel);
   qs("#report-period").addEventListener("change", renderReports);
 }
 

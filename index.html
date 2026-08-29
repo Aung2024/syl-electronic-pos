@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <link rel="preconnect" href="https://esm.sh">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/styles.css?v=20250821c">
+    <link rel="stylesheet" href="assets/css/styles.css?v=20250825d">
   </head>
   <body>
     <div id="auth-screen" class="auth-screen">
@@ -160,6 +160,14 @@
                   <label class="form-label" for="product-name">Name</label>
                   <input id="product-name" class="form-control" required>
                 </div>
+                <div>
+                  <label class="form-label" for="product-image">Product image</label>
+                  <input type="hidden" id="product-image-url">
+                  <input id="product-image" class="form-control" type="file" accept="image/*">
+                  <div class="form-text">JPG, PNG, or WebP up to 2 MB. Resized for storage.</div>
+                  <div id="product-image-preview" class="product-image-preview mt-2"></div>
+                  <button id="clear-product-image" class="btn btn-sm btn-outline-secondary mt-2 d-none" type="button">Remove image</button>
+                </div>
                 <div class="row g-3">
                   <div class="col-6">
                     <label class="form-label" for="product-sku">SKU</label>
@@ -230,6 +238,7 @@
                 <table class="table table-hover align-middle">
                   <thead>
                     <tr>
+                      <th>Image</th>
                       <th>Name</th>
                       <th>SKU</th>
                       <th>Barcode</th>
@@ -293,6 +302,7 @@
             <table class="table table-hover align-middle">
               <thead>
                 <tr>
+                  <th>Image</th>
                   <th>Name</th>
                   <th>SKU</th>
                   <th>Type</th>
@@ -305,6 +315,45 @@
               </thead>
               <tbody id="inventory-body"></tbody>
             </table>
+          </div>
+          <div class="panel mt-4">
+            <h3 class="h5 mb-3">Return log</h3>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th class="text-end">Qty</th>
+                    <th class="text-end">Refund value</th>
+                    <th>Customer</th>
+                    <th>Note</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="return-log-body"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel mt-4">
+            <h3 class="h5 mb-3">Damage log</h3>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th class="text-end">Qty</th>
+                    <th class="text-end">Loss value</th>
+                    <th>Note</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="damage-log-body"></tbody>
+              </table>
+            </div>
           </div>
         </section>
 
@@ -470,14 +519,90 @@
                   <option value="all">All time</option>
                 </select>
               </div>
-              <div class="col-md-4 d-flex align-items-end">
+              <div class="col-md-4 d-flex align-items-end gap-2">
                 <button id="build-report" class="btn btn-primary" type="button">Build Report</button>
+                <button id="export-report-excel" class="btn btn-outline-success" type="button">Export Excel</button>
               </div>
             </div>
-            <div id="reports-output" class="row g-3"></div>
+            <div id="reports-output" class="row g-3 mb-4"></div>
+            <div id="reports-detail"></div>
           </div>
         </section>
       </main>
+    </div>
+
+    <div class="modal fade" id="return-product-modal" tabindex="-1" aria-labelledby="return-product-modal-label" aria-hidden="true">
+      <div class="modal-dialog">
+        <form id="return-product-form" class="modal-content">
+          <div class="modal-header">
+            <h2 class="modal-title h5" id="return-product-modal-label">Record product return</h2>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body vstack gap-3">
+            <input type="hidden" id="return-record-id">
+            <input type="hidden" id="return-product-id">
+            <div>
+              <div class="text-muted small">Product</div>
+              <strong id="return-product-name"></strong>
+            </div>
+            <div>
+              <div class="text-muted small">Current in stock</div>
+              <strong id="return-current-stock"></strong>
+            </div>
+            <div>
+              <label class="form-label" for="return-qty">Return qty</label>
+              <input id="return-qty" class="form-control" type="number" min="0.01" step="0.01" value="1" required>
+            </div>
+            <div>
+              <label class="form-label" for="return-customer">Customer name</label>
+              <input id="return-customer" class="form-control" placeholder="Optional">
+            </div>
+            <div>
+              <label class="form-label" for="return-note">Note</label>
+              <input id="return-note" class="form-control" placeholder="Receipt no., reason, condition, etc.">
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-success" id="return-submit-btn">Record return</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal fade" id="damage-product-modal" tabindex="-1" aria-labelledby="damage-product-modal-label" aria-hidden="true">
+      <div class="modal-dialog">
+        <form id="damage-product-form" class="modal-content">
+          <div class="modal-header">
+            <h2 class="modal-title h5" id="damage-product-modal-label">Record damaged stock</h2>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body vstack gap-3">
+            <input type="hidden" id="damage-record-id">
+            <input type="hidden" id="damage-product-id">
+            <div>
+              <div class="text-muted small">Product</div>
+              <strong id="damage-product-name"></strong>
+            </div>
+            <div>
+              <div class="text-muted small">In stock</div>
+              <strong id="damage-available-stock"></strong>
+            </div>
+            <div>
+              <label class="form-label" for="damage-qty">Damage qty</label>
+              <input id="damage-qty" class="form-control" type="number" min="0.01" step="0.01" value="1" required>
+            </div>
+            <div>
+              <label class="form-label" for="damage-note">Reason / note</label>
+              <input id="damage-note" class="form-control" placeholder="Broken, water damage, etc.">
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-danger" id="damage-submit-btn">Record damage</button>
+          </div>
+        </form>
+      </div>
     </div>
 
     <div class="toast-container position-fixed bottom-0 end-0 p-3">
@@ -488,6 +613,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
-    <script type="module" src="assets/js/app.js?v=20250821d"></script>
+    <script type="module" src="assets/js/app.js?v=20250828c"></script>
   </body>
 </html>

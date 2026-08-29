@@ -25,6 +25,9 @@ insert into settings (id) values ('main') on conflict (id) do nothing;
 -- Migration: add low stock threshold to existing deployments
 alter table settings add column if not exists low_stock_threshold numeric default 5;
 
+-- Migration: add product image URL to existing deployments
+alter table products add column if not exists image_url text;
+
 create table if not exists suppliers (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -44,6 +47,7 @@ create table if not exists products (
   margin_percent numeric,
   price numeric default 0,
   stock_qty numeric default 0,
+  image_url text,
   active boolean default true,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
@@ -113,6 +117,35 @@ create table if not exists expenses (
   note text
 );
 
+create table if not exists stock_damages (
+  id uuid primary key default gen_random_uuid(),
+  date timestamptz default now(),
+  product_id uuid references products(id),
+  product_name text,
+  sku text,
+  qty numeric not null,
+  unit text,
+  unit_cost numeric default 0,
+  loss_value numeric default 0,
+  note text,
+  user_id uuid references auth.users(id)
+);
+
+create table if not exists stock_returns (
+  id uuid primary key default gen_random_uuid(),
+  date timestamptz default now(),
+  product_id uuid references products(id),
+  product_name text,
+  sku text,
+  qty numeric not null,
+  unit text,
+  unit_cost numeric default 0,
+  refund_value numeric default 0,
+  customer_name text,
+  note text,
+  user_id uuid references auth.users(id)
+);
+
 -- Row Level Security
 alter table profiles enable row level security;
 alter table settings enable row level security;
@@ -124,6 +157,8 @@ alter table purchases enable row level security;
 alter table credits enable row level security;
 alter table credit_payments enable row level security;
 alter table expenses enable row level security;
+alter table stock_damages enable row level security;
+alter table stock_returns enable row level security;
 
 create or replace function public.user_role()
 returns text
@@ -194,6 +229,16 @@ create policy "purchases_admin" on purchases
   with check (user_role() = 'admin');
 
 create policy "expenses_admin" on expenses
+  for all to authenticated
+  using (user_role() = 'admin')
+  with check (user_role() = 'admin');
+
+create policy "stock_damages_admin" on stock_damages
+  for all to authenticated
+  using (user_role() = 'admin')
+  with check (user_role() = 'admin');
+
+create policy "stock_returns_admin" on stock_returns
   for all to authenticated
   using (user_role() = 'admin')
   with check (user_role() = 'admin');
