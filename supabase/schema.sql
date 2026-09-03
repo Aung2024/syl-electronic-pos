@@ -22,12 +22,6 @@ create table if not exists settings (
 
 insert into settings (id) values ('main') on conflict (id) do nothing;
 
--- Migration: add low stock threshold to existing deployments
-alter table settings add column if not exists low_stock_threshold numeric default 5;
-
--- Migration: add product image URL to existing deployments
-alter table products add column if not exists image_url text;
-
 create table if not exists suppliers (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -146,6 +140,10 @@ create table if not exists stock_returns (
   user_id uuid references auth.users(id)
 );
 
+-- Migrations for existing deployments (safe to re-run)
+alter table settings add column if not exists low_stock_threshold numeric default 5;
+alter table products add column if not exists image_url text;
+
 -- Row Level Security
 alter table profiles enable row level security;
 alter table settings enable row level security;
@@ -171,89 +169,108 @@ as $$
 $$;
 
 -- Profiles
+drop policy if exists "profiles_select_own_or_admin" on profiles;
 create policy "profiles_select_own_or_admin" on profiles
   for select to authenticated
   using (auth.uid() = id or user_role() = 'admin');
 
+drop policy if exists "profiles_admin_write" on profiles;
 create policy "profiles_admin_write" on profiles
   for all to authenticated
   using (user_role() = 'admin')
   with check (user_role() = 'admin');
 
 -- Settings
+drop policy if exists "settings_select_auth" on settings;
 create policy "settings_select_auth" on settings
   for select to authenticated using (true);
 
+drop policy if exists "settings_admin_write" on settings;
 create policy "settings_admin_write" on settings
   for all to authenticated
   using (user_role() = 'admin')
   with check (user_role() = 'admin');
 
 -- Products
+drop policy if exists "products_select_auth" on products;
 create policy "products_select_auth" on products
   for select to authenticated using (true);
 
+drop policy if exists "products_admin_write" on products;
 create policy "products_admin_write" on products
   for all to authenticated
   using (user_role() = 'admin')
   with check (user_role() = 'admin');
 
+drop policy if exists "products_sales_update" on products;
 create policy "products_sales_update" on products
   for update to authenticated
   using (user_role() = 'sales')
   with check (user_role() = 'sales');
 
 -- Sales
+drop policy if exists "sales_insert_staff" on sales;
 create policy "sales_insert_staff" on sales
   for insert to authenticated with check (user_role() in ('admin', 'sales'));
 
+drop policy if exists "sales_select_admin" on sales;
 create policy "sales_select_admin" on sales
   for select to authenticated using (user_role() = 'admin');
 
 -- Sale items
+drop policy if exists "sale_items_insert_staff" on sale_items;
 create policy "sale_items_insert_staff" on sale_items
   for insert to authenticated with check (user_role() in ('admin', 'sales'));
 
+drop policy if exists "sale_items_select_admin" on sale_items;
 create policy "sale_items_select_admin" on sale_items
   for select to authenticated using (user_role() = 'admin');
 
 -- Suppliers, purchases, expenses, credit payments: admin only
+drop policy if exists "suppliers_admin" on suppliers;
 create policy "suppliers_admin" on suppliers
   for all to authenticated
   using (user_role() = 'admin')
   with check (user_role() = 'admin');
 
+drop policy if exists "purchases_admin" on purchases;
 create policy "purchases_admin" on purchases
   for all to authenticated
   using (user_role() = 'admin')
   with check (user_role() = 'admin');
 
+drop policy if exists "expenses_admin" on expenses;
 create policy "expenses_admin" on expenses
   for all to authenticated
   using (user_role() = 'admin')
   with check (user_role() = 'admin');
 
+drop policy if exists "stock_damages_admin" on stock_damages;
 create policy "stock_damages_admin" on stock_damages
   for all to authenticated
   using (user_role() = 'admin')
   with check (user_role() = 'admin');
 
+drop policy if exists "stock_returns_admin" on stock_returns;
 create policy "stock_returns_admin" on stock_returns
   for all to authenticated
   using (user_role() = 'admin')
   with check (user_role() = 'admin');
 
+drop policy if exists "credit_payments_admin" on credit_payments;
 create policy "credit_payments_admin" on credit_payments
   for all to authenticated
   using (user_role() = 'admin')
   with check (user_role() = 'admin');
 
 -- Credits: admin full; sales can create receivables
+drop policy if exists "credits_admin" on credits;
 create policy "credits_admin" on credits
   for all to authenticated
   using (user_role() = 'admin')
   with check (user_role() = 'admin');
 
+drop policy if exists "credits_sales_insert" on credits;
 create policy "credits_sales_insert" on credits
   for insert to authenticated
   with check (user_role() = 'sales' and type = 'receivable');

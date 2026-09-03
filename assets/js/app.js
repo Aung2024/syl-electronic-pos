@@ -546,7 +546,12 @@ async function deleteReturnRecord(recordId) {
 
 const state = {
   user: null,
-  isSupabaseReady: !supabaseConfig.url.startsWith("PASTE_"),
+  isSupabaseReady:
+    Boolean(supabaseConfig.url) &&
+    Boolean(supabaseConfig.anonKey) &&
+    !supabaseConfig.url.startsWith("PASTE_") &&
+    !supabaseConfig.anonKey.startsWith("PASTE_"),
+  handlingLogin: false,
   settings: DEFAULT_SETTINGS,
   products: [],
   suppliers: [],
@@ -575,10 +580,10 @@ function showToast(message) {
   bootstrap.Toast.getOrCreateInstance(toastEl).show();
 }
 
-function setLoginLoading(isLoading) {
+function setLoginLoading(isLoading, message = "Signing in...") {
   qs("#login-btn").disabled = isLoading;
   qs("#login-spinner").classList.toggle("d-none", !isLoading);
-  qs("#login-btn-text").textContent = isLoading ? "Signing in..." : "Sign in";
+  qs("#login-btn-text").textContent = isLoading ? message : "Sign in";
   qs("#login-email").disabled = isLoading;
   qs("#login-password").disabled = isLoading;
 }
@@ -779,49 +784,59 @@ function calculatePrice(product, settings = state.settings) {
   return roundPrice(landedCost * (1 + marginFor(product, settings) / 100) * fxFactor, settings.roundTo);
 }
 
-async function loadData() {
-  const role = state.user?.role || "sales";
+async function loadCoreData() {
   const [settings, products] = await Promise.all([
     listDocs("settings"),
     listDocs("products")
   ]);
 
-  let suppliers = [];
-  let purchases = [];
-  let sales = [];
-  let saleItems = [];
-  let credits = [];
-  let creditPayments = [];
-  let expenses = [];
-  let stockDamages = [];
-  let stockReturns = [];
-
-  if (role === "admin" || !state.isSupabaseReady) {
-    [
-      suppliers,
-      purchases,
-      sales,
-      saleItems,
-      credits,
-      creditPayments,
-      expenses,
-      stockDamages,
-      stockReturns
-    ] = await Promise.all([
-      listDocs("suppliers"),
-      listDocs("purchases"),
-      listDocs("sales"),
-      listDocs("saleItems"),
-      listDocs("credits"),
-      listDocs("creditPayments"),
-      listDocs("expenses"),
-      listDocs("stockDamages"),
-      listDocs("stockReturns")
-    ]);
-  }
-
   state.settings = { ...DEFAULT_SETTINGS, ...(settings.find((item) => item.id === "main") || {}) };
   state.products = products.sort((a, b) => a.name.localeCompare(b.name));
+
+  renderSettings();
+  renderProducts();
+  renderInventory();
+  renderProductSupplierSelect();
+  renderCart();
+}
+
+async function loadAdminData() {
+  const role = state.user?.role || "sales";
+  if (role !== "admin" && state.isSupabaseReady) {
+    state.suppliers = [];
+    state.purchases = [];
+    state.sales = [];
+    state.saleItems = [];
+    state.credits = [];
+    state.creditPayments = [];
+    state.expenses = [];
+    state.stockDamages = [];
+    state.stockReturns = [];
+    return;
+  }
+
+  const [
+    suppliers,
+    purchases,
+    sales,
+    saleItems,
+    credits,
+    creditPayments,
+    expenses,
+    stockDamages,
+    stockReturns
+  ] = await Promise.all([
+    listDocs("suppliers"),
+    listDocs("purchases"),
+    listDocs("sales"),
+    listDocs("saleItems"),
+    listDocs("credits"),
+    listDocs("creditPayments"),
+    listDocs("expenses"),
+    listDocs("stockDamages"),
+    listDocs("stockReturns")
+  ]);
+
   state.suppliers = suppliers.sort((a, b) => a.name.localeCompare(b.name));
   state.purchases = purchases.sort((a, b) => b.date.localeCompare(a.date));
   state.sales = sales.sort((a, b) => b.date.localeCompare(a.date));
@@ -832,7 +847,18 @@ async function loadData() {
   state.stockDamages = stockDamages.sort((a, b) => b.date.localeCompare(a.date));
   state.stockReturns = stockReturns.sort((a, b) => b.date.localeCompare(a.date));
 
-  renderAll();
+  renderSuppliersTable();
+  renderPurchases();
+  renderCredits();
+  renderExpenses();
+  renderDashboard();
+  renderReports();
+  renderInventory();
+}
+
+async function loadData() {
+  await loadCoreData();
+  await loadAdminData();
 }
 
 function renderAll() {
@@ -869,13 +895,65 @@ function showRoute() {
   if (target.id === "pos") qs("#barcode-input").focus();
 }
 
-function showApp(profile) {
+function leaveApp(message = "Signed out. Sign in again to continue.") {
+  state.user = null;
+  state.cart = [];
+  state.lastReceipt = null;
+  state.products = [];
+  state.suppliers = [];
+  state.purchases = [];
+  state.sales = [];
+  state.saleItems = [];
+  state.credits = [];
+  state.creditPayments = [];
+  state.expenses = [];
+  state.stockDamages = [];
+  state.stockReturns = [];
+  state.settings = { ...DEFAULT_SETTINGS };
+
+  qs("#app-shell").classList.add("d-none");
+  qs("#auth-screen").classList.remove("d-none");
+  qs("#login-password").value = "";
+  qs("#auth-message").textContent = message;
+  location.hash = "";
+}
+
+async function signOutUser() {
+  const btn = qs("#logout-btn");
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Signing out...";
+  state.handlingLogin = true;
+
+  try {
+    if (state.isSupabaseReady && supabase) {
+      const { error } = await supabase.auth.signOut({ scope: "local" });
+      if (error) throw error;
+    }
+    leaveApp();
+  } catch (error) {
+    showToast(error.message || "Could not sign out.");
+    leaveApp("Sign out had a problem. Please sign in again.");
+  } finally {
+    state.handlingLogin = false;
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+async function enterApp(profile) {
   state.user = profile;
   qs("#auth-screen").classList.add("d-none");
   qs("#app-shell").classList.remove("d-none");
   applyRole();
   showRoute();
-  loadData().catch((error) => showToast(error.message));
+
+  await loadCoreData();
+  loadAdminData().catch((error) => showToast(error.message));
+}
+
+async function showApp(profile) {
+  await enterApp(profile);
 }
 
 function renderSettings() {
@@ -1793,32 +1871,33 @@ function bindEvents() {
 
   qs("#login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    setLoginLoading(true);
+    setLoginLoading(true, "Signing in...");
     qs("#auth-message").textContent = "";
+    state.handlingLogin = true;
 
     try {
       if (!state.isSupabaseReady) {
-        await new Promise((resolve) => setTimeout(resolve, 600));
-        showApp(demoUser);
+        await enterApp(demoUser);
         return;
       }
 
-      const { error } = await supabase.auth.signInWithPassword({
-        email: qs("#login-email").value,
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: qs("#login-email").value.trim(),
         password: qs("#login-password").value
       });
       if (error) throw error;
+
+      const profile = await getUserProfile(data.user);
+      await enterApp(profile);
     } catch (error) {
       qs("#auth-message").textContent = error.message;
     } finally {
+      state.handlingLogin = false;
       setLoginLoading(false);
     }
   });
 
-  qs("#logout-btn").addEventListener("click", async () => {
-    if (state.isSupabaseReady) await supabase.auth.signOut();
-    location.reload();
-  });
+  qs("#logout-btn").addEventListener("click", signOutUser);
 
   [
     "#product-unit-cost",
@@ -2001,12 +2080,25 @@ function initSupabase() {
   if (!state.isSupabaseReady) return;
   supabase = createClient(supabaseConfig.url, supabaseConfig.anonKey);
 
-  supabase.auth.onAuthStateChange(async (_event, session) => {
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    if (state.handlingLogin) return;
+
+    if (event === "SIGNED_OUT") {
+      if (state.user) leaveApp();
+      return;
+    }
+
     if (!session?.user) return;
+    if (event !== "INITIAL_SESSION" && event !== "SIGNED_IN") return;
+    if (state.user?.id === session.user.id) return;
+
     try {
-      showApp(await getUserProfile(session.user));
+      setLoginLoading(true);
+      await enterApp(await getUserProfile(session.user));
     } catch (error) {
       qs("#auth-message").textContent = error.message;
+    } finally {
+      setLoginLoading(false);
     }
   });
 }
@@ -2016,7 +2108,12 @@ function init() {
   initSupabase();
   fillProductForm();
   fillSupplierForm();
-  if (!state.isSupabaseReady) {
+
+  const authMessage = qs("#auth-message");
+  if (state.isSupabaseReady) {
+    authMessage.textContent = "Connected to Supabase. Sign in with your shop email and password.";
+  } else {
+    authMessage.innerHTML = "Configure Supabase in <code>assets/js/supabase-config.js</code>. Demo mode is used until real config is added.";
     qs("#login-email").value = demoUser.email;
     qs("#login-password").value = "demo";
   }

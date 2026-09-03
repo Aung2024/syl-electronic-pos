@@ -4,16 +4,19 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Electronics Shop POS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <link rel="preconnect" href="https://esm.sh">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/styles.css?v=20250825d">
+    <link rel="stylesheet" href="assets/css/styles.css?v=20250903premium">
   </head>
   <body>
     <div id="auth-screen" class="auth-screen">
       <main class="auth-card">
-        <p class="text-uppercase small text-muted mb-1">Electronics Shop</p>
-        <h1 class="h3 mb-3">POS & Business Management</h1>
+        <p class="auth-kicker">Electronics Shop</p>
+        <h1>POS &amp; Business</h1>
+        <p class="auth-sub">Sign in to manage sales, stock, and reports.</p>
         <form id="login-form" class="vstack gap-3">
           <div>
             <label class="form-label" for="login-email">Email</label>
@@ -27,7 +30,7 @@
             <span id="login-btn-text">Sign in</span>
             <span id="login-spinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
           </button>
-          <p id="auth-message" class="small text-muted mb-0">Configure Supabase in <code>assets/js/supabase-config.js</code>. Demo mode is used until real config is added.</p>
+          <p id="auth-message" class="small text-muted mb-0">Checking Supabase connection...</p>
         </form>
       </main>
     </div>
@@ -613,6 +616,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
-    <script type="module" src="assets/js/app.js?v=20250828c"></script>
+    <script type="module" src="assets/js/app.js?v=20250903signout2"></script>
   </body>
 </html>
