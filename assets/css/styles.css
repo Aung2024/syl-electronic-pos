@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap");
-
 :root {
   --ink: #141a1f;
   --ink-soft: #2a343c;
@@ -17,8 +15,6 @@
   --shadow: 0 10px 30px rgba(20, 26, 31, 0.07);
   --radius: 0.9rem;
   --radius-sm: 0.55rem;
-  --font-ui: "Sora", system-ui, sans-serif;
-  --font-display: "Instrument Serif", Georgia, serif;
 }
 
 * {
@@ -28,7 +24,6 @@
 body {
   min-height: 100vh;
   color: var(--ink);
-  font-family: var(--font-ui);
   background-color: var(--page);
   background-image:
     radial-gradient(ellipse 80% 50% at 0% -10%, rgba(13, 115, 119, 0.16), transparent 55%),
@@ -172,29 +167,6 @@ h1, h2, h3, .navbar-brand {
   padding: 2.25rem 2rem;
 }
 
-.auth-card .auth-kicker {
-  margin: 0 0 0.35rem;
-  color: var(--brand);
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.auth-card h1 {
-  font-family: var(--font-display);
-  font-weight: 400;
-  font-size: clamp(1.85rem, 4vw, 2.25rem);
-  letter-spacing: -0.01em;
-  margin-bottom: 0.35rem;
-}
-
-.auth-card .auth-sub {
-  color: var(--muted);
-  font-size: 0.92rem;
-  margin-bottom: 1.5rem;
-}
-
 /* Shell / nav */
 .app-shell {
   min-height: 100vh;
@@ -208,10 +180,9 @@ h1, h2, h3, .navbar-brand {
 }
 
 .app-nav .navbar-brand {
-  font-family: var(--font-display);
-  font-weight: 400;
-  font-size: 1.35rem;
-  letter-spacing: 0;
+  font-weight: 700;
+  font-size: 1.2rem;
+  letter-spacing: -0.01em;
 }
 
 .app-nav .nav-link {
@@ -483,14 +454,12 @@ h1, h2, h3, .navbar-brand {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow);
-  font-family: var(--font-ui);
 }
 
 .modal-content {
   border: 0;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  font-family: var(--font-ui);
 }
 
 .modal-header {

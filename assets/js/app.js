@@ -225,6 +225,29 @@ function inventorySortRank(product) {
   return 2;
 }
 
+function productHasSales(productId) {
+  return state.saleItems.some((item) => String(item.productId) === String(productId));
+}
+
+function soldQtyForProduct(productId) {
+  return state.saleItems.reduce((sum, item) => {
+    if (String(item.productId) !== String(productId)) return sum;
+    return sum + Number(item.qty || 0);
+  }, 0);
+}
+
+function returnedQtyForProduct(productId, excludeReturnId = null) {
+  return state.stockReturns.reduce((sum, item) => {
+    if (String(item.productId) !== String(productId)) return sum;
+    if (excludeReturnId && String(item.id) === String(excludeReturnId)) return sum;
+    return sum + Number(item.qty || 0);
+  }, 0);
+}
+
+function returnableQtyForProduct(productId, excludeReturnId = null) {
+  return Math.max(0, soldQtyForProduct(productId) - returnedQtyForProduct(productId, excludeReturnId));
+}
+
 function openProductRestock(productId) {
   location.hash = "#products";
   showRoute();
@@ -242,6 +265,11 @@ function openDamageModal(productId) {
   const product = state.products.find((item) => item.id === productId);
   if (!product) {
     showToast("Product not found.");
+    return;
+  }
+
+  if (!productHasSales(product.id)) {
+    showToast("Return and damage are available only after this product has been sold.");
     return;
   }
 
@@ -278,6 +306,39 @@ function openDamageEditModal(recordId) {
   qs("#damage-qty").max = stockQty + Number(record.qty || 0);
   qs("#damage-note").value = record.note || "";
   bootstrap.Modal.getOrCreateInstance(qs("#damage-product-modal")).show();
+}
+
+async function updateProductStock(productId, nextQty) {
+  const stockQty = Math.max(0, Number(nextQty || 0));
+  const product = state.products.find((item) => item.id === productId);
+  if (!product) throw new Error("Product not found.");
+
+  if (!state.isSupabaseReady) {
+    const saved = await saveDoc("products", {
+      ...product,
+      stockQty,
+      updatedAt: nowIso()
+    });
+    const index = state.products.findIndex((item) => item.id === productId);
+    if (index >= 0) state.products[index] = { ...state.products[index], stockQty };
+    return saved;
+  }
+
+  const { data, error } = await supabase
+    .from("products")
+    .update({
+      stock_qty: stockQty,
+      updated_at: nowIso()
+    })
+    .eq("id", productId)
+    .select()
+    .single();
+  throwIfError(error);
+
+  const saved = fromDbRow(data);
+  const index = state.products.findIndex((item) => item.id === productId);
+  if (index >= 0) state.products[index] = { ...state.products[index], stockQty: Number(saved.stockQty) };
+  return saved;
 }
 
 async function recordProductDamage(event) {
@@ -324,15 +385,10 @@ async function recordProductDamage(event) {
       note
     });
 
-    await saveDoc("products", {
-      ...product,
-      stockQty: stockQty - delta,
-      updatedAt: nowIso()
-    });
-
+    const updated = await updateProductStock(product.id, stockQty - delta);
     bootstrap.Modal.getInstance(qs("#damage-product-modal"))?.hide();
     await loadData();
-    showToast("Damage record updated.");
+    showToast(`Damage updated. In stock now ${Number(updated.stockQty || 0).toLocaleString()} ${product.unit}.`);
     return;
   }
 
@@ -354,15 +410,10 @@ async function recordProductDamage(event) {
     userId: state.user?.id || state.user?.uid
   });
 
-  await saveDoc("products", {
-    ...product,
-    stockQty: stockQty - qty,
-    updatedAt: nowIso()
-  });
-
+  const updated = await updateProductStock(product.id, stockQty - qty);
   bootstrap.Modal.getInstance(qs("#damage-product-modal"))?.hide();
   await loadData();
-  showToast(`${qty.toLocaleString()} ${product.unit} marked as damaged.`);
+  showToast(`Damage recorded. Stock reduced by ${qty.toLocaleString()} ${product.unit}. In stock now ${Number(updated.stockQty || 0).toLocaleString()}.`);
 }
 
 async function deleteDamageRecord(recordId) {
@@ -376,16 +427,12 @@ async function deleteDamageRecord(recordId) {
 
   const product = state.products.find((item) => item.id === record.productId);
   if (product) {
-    await saveDoc("products", {
-      ...product,
-      stockQty: Number(product.stockQty || 0) + Number(record.qty || 0),
-      updatedAt: nowIso()
-    });
+    await updateProductStock(product.id, Number(product.stockQty || 0) + Number(record.qty || 0));
   }
 
   await removeDoc("stockDamages", recordId);
   await loadData();
-  showToast("Damage record deleted.");
+  showToast("Damage record deleted. Stock restored.");
 }
 
 function setReturnModalMode(mode, record = null) {
@@ -402,11 +449,26 @@ function openReturnModal(productId) {
     return;
   }
 
+  const soldQty = soldQtyForProduct(product.id);
+  const returnedQty = returnedQtyForProduct(product.id);
+  const returnableQty = returnableQtyForProduct(product.id);
+
+  if (returnableQty <= 0) {
+    showToast(soldQty <= 0
+      ? "No sales yet. Return is available only after this product has been sold."
+      : "All sold qty has already been returned.");
+    return;
+  }
+
   setReturnModalMode("create");
   qs("#return-product-id").value = product.id;
   qs("#return-product-name").textContent = product.name;
   qs("#return-current-stock").textContent = `${Number(product.stockQty || 0).toLocaleString()} ${product.unit}`;
-  qs("#return-qty").value = 1;
+  qs("#return-sold-qty").textContent = `${soldQty.toLocaleString()} ${product.unit}`;
+  qs("#return-returned-qty").textContent = `${returnedQty.toLocaleString()} ${product.unit}`;
+  qs("#return-returnable-qty").textContent = `${returnableQty.toLocaleString()} ${product.unit}`;
+  qs("#return-qty").value = Math.min(1, returnableQty);
+  qs("#return-qty").max = returnableQty;
   qs("#return-customer").value = "";
   qs("#return-note").value = "";
   bootstrap.Modal.getOrCreateInstance(qs("#return-product-modal")).show();
@@ -420,11 +482,19 @@ function openReturnEditModal(recordId) {
     return;
   }
 
+  const soldQty = soldQtyForProduct(product.id);
+  const returnedQty = returnedQtyForProduct(product.id, record.id);
+  const returnableQty = returnableQtyForProduct(product.id, record.id);
+
   setReturnModalMode("edit", record);
   qs("#return-product-id").value = product.id;
   qs("#return-product-name").textContent = product.name;
   qs("#return-current-stock").textContent = `${Number(product.stockQty || 0).toLocaleString()} ${product.unit}`;
+  qs("#return-sold-qty").textContent = `${soldQty.toLocaleString()} ${product.unit}`;
+  qs("#return-returned-qty").textContent = `${returnedQty.toLocaleString()} ${product.unit}`;
+  qs("#return-returnable-qty").textContent = `${returnableQty.toLocaleString()} ${product.unit}`;
   qs("#return-qty").value = Number(record.qty || 1);
+  qs("#return-qty").max = returnableQty;
   qs("#return-customer").value = record.customerName || "";
   qs("#return-note").value = record.note || "";
   bootstrap.Modal.getOrCreateInstance(qs("#return-product-modal")).show();
@@ -440,6 +510,7 @@ async function recordProductReturn(event) {
   const customerName = qs("#return-customer").value.trim();
   const note = qs("#return-note").value.trim();
   const stockQty = Number(product?.stockQty || 0);
+  const returnableQty = returnableQtyForProduct(productId, recordId || null);
 
   if (!product) {
     showToast("Product not found.");
@@ -447,6 +518,10 @@ async function recordProductReturn(event) {
   }
   if (qty <= 0) {
     showToast("Enter a valid return qty.");
+    return;
+  }
+  if (qty > returnableQty) {
+    showToast(`Return qty cannot exceed sold qty available to return (${returnableQty.toLocaleString()} ${product.unit}).`);
     return;
   }
 
@@ -477,12 +552,7 @@ async function recordProductReturn(event) {
       note
     });
 
-    await saveDoc("products", {
-      ...product,
-      stockQty: stockQty + delta,
-      updatedAt: nowIso()
-    });
-
+    await updateProductStock(product.id, stockQty + delta);
     bootstrap.Modal.getInstance(qs("#return-product-modal"))?.hide();
     await loadData();
     showToast("Return record updated.");
@@ -503,12 +573,7 @@ async function recordProductReturn(event) {
     userId: state.user?.id || state.user?.uid
   });
 
-  await saveDoc("products", {
-    ...product,
-    stockQty: stockQty + qty,
-    updatedAt: nowIso()
-  });
-
+  await updateProductStock(product.id, stockQty + qty);
   bootstrap.Modal.getInstance(qs("#return-product-modal"))?.hide();
   await loadData();
   showToast(`${qty.toLocaleString()} ${product.unit} returned to stock.`);
@@ -532,11 +597,7 @@ async function deleteReturnRecord(recordId) {
       return;
     }
 
-    await saveDoc("products", {
-      ...product,
-      stockQty: stockQty - returnQty,
-      updatedAt: nowIso()
-    });
+    await updateProductStock(product.id, stockQty - returnQty);
   }
 
   await removeDoc("stockReturns", recordId);
@@ -851,7 +912,6 @@ async function loadAdminData() {
   renderPurchases();
   renderCredits();
   renderExpenses();
-  renderDashboard();
   renderReports();
   renderInventory();
 }
@@ -871,7 +931,6 @@ function renderAll() {
   renderCredits();
   renderExpenses();
   renderCart();
-  renderDashboard();
   renderReports();
 }
 
@@ -886,7 +945,7 @@ function applyRole() {
 }
 
 function showRoute() {
-  const hash = location.hash || (state.user?.role === "sales" ? "#pos" : "#dashboard");
+  const hash = location.hash || "#pos";
   const target = qs(hash) || qs("#pos");
   qsa(".view").forEach((view) => view.classList.remove("active"));
   target.classList.add("active");
@@ -1060,6 +1119,13 @@ function renderInventory() {
     ? products.map((product) => {
       const qty = Number(product.stockQty || 0);
       const unitCost = landedCost(product);
+      const hasSales = productHasSales(product.id);
+      const returnableQty = returnableQtyForProduct(product.id);
+      const returnDisabled = returnableQty <= 0 ? "disabled" : "";
+      const damageDisabled = !hasSales || qty <= 0 ? "disabled" : "";
+      const returnTitle = returnableQty > 0
+        ? `Return up to ${returnableQty.toLocaleString()} ${product.unit} (based on sales)`
+        : "Return available only for sold qty not yet returned";
       return `
     <tr>
       <td class="product-image-cell">${productImageHtml(product.imageUrl, product.name)}</td>
@@ -1076,8 +1142,8 @@ function renderInventory() {
       <td class="text-end">
         <div class="d-flex flex-wrap justify-content-end gap-1">
           <button class="btn btn-sm btn-outline-secondary" data-print-label="${product.id}">Print label</button>
-          <button class="btn btn-sm btn-outline-success" data-return-product="${product.id}">Return</button>
-          <button class="btn btn-sm btn-outline-danger" data-damage-product="${product.id}" ${qty <= 0 ? "disabled" : ""}>Damage</button>
+          <button class="btn btn-sm btn-outline-success" data-return-product="${product.id}" ${returnDisabled} title="${returnTitle}">Return</button>
+          <button class="btn btn-sm btn-outline-danger" data-damage-product="${product.id}" ${damageDisabled} title="${hasSales ? "Record damage" : "Available after first sale"}">Damage</button>
           <button class="btn btn-sm btn-outline-primary" data-restock-product="${product.id}">Restock</button>
         </div>
       </td>
@@ -1327,8 +1393,49 @@ function addProductToCart(product, quantity = 1) {
   qs("#barcode-input").focus();
 }
 
-function cartTotal() {
+function cartSubtotal() {
   return state.cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.qty || 0), 0);
+}
+
+function getCartDiscount() {
+  const subtotal = cartSubtotal();
+  const type = qs("#discount-type")?.value || "none";
+  const value = Number(qs("#discount-value")?.value || 0);
+  let amount = 0;
+
+  if (type === "percent") {
+    amount = subtotal * (Math.min(Math.max(value, 0), 100) / 100);
+  } else if (type === "manual") {
+    amount = Math.min(Math.max(value, 0), subtotal);
+  }
+
+  amount = Math.round(amount);
+  return {
+    type,
+    value: type === "none" ? 0 : value,
+    amount,
+    total: Math.max(0, subtotal - amount),
+    subtotal
+  };
+}
+
+function cartTotal() {
+  return getCartDiscount().total;
+}
+
+function syncDiscountInputState() {
+  const type = qs("#discount-type")?.value || "none";
+  const input = qs("#discount-value");
+  if (!input) return;
+  input.disabled = type === "none";
+  if (type === "none") input.value = 0;
+  input.placeholder = type === "percent" ? "% off" : type === "manual" ? "MMK off" : "0";
+}
+
+function resetCheckoutDiscount() {
+  if (qs("#discount-type")) qs("#discount-type").value = "none";
+  if (qs("#discount-value")) qs("#discount-value").value = 0;
+  syncDiscountInputState();
 }
 
 function renderCart() {
@@ -1346,11 +1453,19 @@ function renderCart() {
       <td class="text-end"><button class="btn btn-sm btn-outline-danger" data-remove-cart="${item.productId}">Remove</button></td>
     </tr>
   `).join("");
+
+  const discount = getCartDiscount();
   qs("#cart-items").textContent = state.cart.reduce((sum, item) => sum + Number(item.qty || 0), 0).toLocaleString();
-  qs("#cart-total").textContent = money(cartTotal());
+  qs("#cart-subtotal").textContent = money(discount.subtotal);
+  qs("#cart-discount").textContent = discount.amount > 0
+    ? `-${money(discount.amount)}${discount.type === "percent" ? ` (${discount.value}%)` : ""}`
+    : money(0);
+  qs("#cart-total").textContent = money(discount.total);
 }
 
 function renderReceipt(sale, items) {
+  const discountAmount = Number(sale.discountAmount || 0);
+  const subtotal = Number(sale.subtotal != null ? sale.subtotal : sale.total || 0);
   const receipt = `
     <h4>Electronics Shop</h4>
     <p class="text-center mb-2">Receipt #${sale.receiptNo}<br>${new Date(sale.date).toLocaleString()}</p>
@@ -1361,12 +1476,24 @@ function renderReceipt(sale, items) {
       </div>
     `).join("")}
     <hr>
+    <div class="receipt-line"><span>Subtotal</span><span>${money(subtotal)}</span></div>
+    ${discountAmount > 0 ? `<div class="receipt-line"><span>Discount${sale.discountType === "percent" ? ` (${sale.discountValue}%)` : ""}</span><span>-${money(discountAmount)}</span></div>` : ""}
     <div class="receipt-line"><strong>Total</strong><strong>${money(sale.total)}</strong></div>
-    <div class="receipt-line"><span>Payment</span><span>${sale.paymentType}</span></div>
+    <div class="receipt-line"><span>Payment</span><span>${paymentTypeLabel(sale.paymentType)}</span></div>
     <p class="text-center mt-3 mb-0">Thank you</p>
   `;
   qs("#receipt-preview").innerHTML = receipt;
   state.lastReceipt = { sale, items };
+}
+
+function paymentTypeLabel(type) {
+  const labels = {
+    cash: "Cash",
+    kpay: "KPay",
+    kbz: "KBZ Mobile Banking",
+    credit: "Credit sale"
+  };
+  return labels[type] || type || "-";
 }
 
 function findProductByBarcode(barcode) {
@@ -1388,13 +1515,18 @@ async function completeSale() {
     }
   }
 
+  const discount = getCartDiscount();
   const sale = await saveDoc("sales", {
     receiptNo: `S-${Date.now()}`,
     date: nowIso(),
     userId: state.user.id || state.user.uid,
     customerName: qs("#customer-name").value.trim(),
     paymentType: qs("#payment-type").value,
-    total: cartTotal()
+    subtotal: discount.subtotal,
+    discountType: discount.type,
+    discountValue: discount.value,
+    discountAmount: discount.amount,
+    total: discount.total
   });
 
   const savedItems = [];
@@ -1435,6 +1567,8 @@ async function completeSale() {
   renderReceipt(sale, savedItems);
   state.cart = [];
   qs("#customer-name").value = "";
+  resetCheckoutDiscount();
+  renderCart();
   await loadData();
   showToast("Sale completed.");
 }
@@ -1480,10 +1614,12 @@ async function recordCreditPayment(event) {
     return;
   }
 
+  const paymentType = qs("#credit-payment-type").value || "cash";
   const paidAmount = Number(credit.paidAmount || 0) + amount;
   await saveDoc("creditPayments", {
     creditId: credit.id,
     amount,
+    paymentType,
     date: nowIso()
   });
   await saveDoc("credits", {
@@ -1493,8 +1629,9 @@ async function recordCreditPayment(event) {
   });
 
   qs("#credit-payment-amount").value = "";
+  qs("#credit-payment-type").value = "cash";
   await loadData();
-  showToast("Payment recorded.");
+  showToast(`Payment recorded (${paymentTypeLabel(paymentType)}).`);
 }
 
 function renderExpenses() {
@@ -1547,20 +1684,6 @@ function reportData(period = "month") {
 
 function metricCard(label, value) {
   return `<div class="col-sm-6 col-xl-3"><div class="metric"><span>${label}</span><strong>${money(value)}</strong></div></div>`;
-}
-
-function renderDashboard() {
-  const data = reportData("month");
-  qs("#dashboard-cards").innerHTML = [
-    metricCard("Monthly sales", data.salesTotal),
-    metricCard("Monthly purchases", data.purchaseTotal),
-    metricCard("Stock value", data.stockValue),
-    metricCard("Receivables", data.receivableTotal),
-    metricCard("Payables", data.payableTotal),
-    metricCard("Expenses", data.expenseTotal),
-    metricCard("Cash flow", data.cashFlow),
-    `<div class="col-sm-6 col-xl-3"><div class="metric"><span>Products</span><strong>${state.products.length}</strong></div></div>`
-  ].join("");
 }
 
 function reportPeriodLabel(period) {
@@ -1622,7 +1745,7 @@ function renderReportDetails(report) {
     new Date(sale.date).toLocaleDateString(),
     sale.receiptNo || "-",
     sale.customerName || "-",
-    sale.paymentType || "-",
+    paymentTypeLabel(sale.paymentType),
     `<span class="text-end d-block">${money(sale.total)}</span>`
   ]);
 
@@ -1715,7 +1838,7 @@ async function exportReportExcel() {
         new Date(sale.date).toLocaleDateString(),
         sale.receiptNo || "",
         sale.customerName || "",
-        sale.paymentType || "",
+        paymentTypeLabel(sale.paymentType),
         excelMoney(sale.total)
       ])
     ]);
@@ -1995,6 +2118,11 @@ function bindEvents() {
   });
 
   qs("#checkout-btn").addEventListener("click", completeSale);
+  qs("#discount-type")?.addEventListener("change", () => {
+    syncDiscountInputState();
+    renderCart();
+  });
+  qs("#discount-value")?.addEventListener("input", renderCart);
   qs("#print-last-receipt").addEventListener("click", printReceipt);
   qs("#print-labels-btn").addEventListener("click", printBarcodeLabels);
 
@@ -2041,7 +2169,6 @@ function bindEvents() {
     showToast("Expense saved.");
   });
 
-  qs("#refresh-dashboard").addEventListener("click", loadData);
   qs("#refresh-inventory")?.addEventListener("click", loadData);
   ["#inventory-search", "#inventory-status-filter", "#inventory-type-filter"].forEach((selector) => {
     qs(selector)?.addEventListener("input", renderInventory);
@@ -2076,38 +2203,63 @@ function bindEvents() {
   qs("#report-period").addEventListener("change", renderReports);
 }
 
+async function restoreSession(user) {
+  if (!user || state.handlingLogin) return;
+  if (state.user?.id === user.id) return;
+
+  try {
+    const profile = await getUserProfile(user);
+    await enterApp(profile);
+  } catch (error) {
+    qs("#auth-message").textContent = error.message || "Could not restore session. Please sign in.";
+    setLoginLoading(false);
+    try {
+      await supabase.auth.signOut({ scope: "local" });
+    } catch (_error) {
+      // Ignore sign-out errors while recovering the login form.
+    }
+  } finally {
+    setLoginLoading(false);
+  }
+}
+
 function initSupabase() {
   if (!state.isSupabaseReady) return;
   supabase = createClient(supabaseConfig.url, supabaseConfig.anonKey);
 
-  supabase.auth.onAuthStateChange(async (event, session) => {
+  // Keep the callback sync and defer async work. Awaiting Supabase queries
+  // inside onAuthStateChange can deadlock the auth client and freeze login.
+  supabase.auth.onAuthStateChange((event, session) => {
     if (state.handlingLogin) return;
 
     if (event === "SIGNED_OUT") {
       if (state.user) leaveApp();
+      setLoginLoading(false);
       return;
     }
 
-    if (!session?.user) return;
+    if (!session?.user) {
+      setLoginLoading(false);
+      return;
+    }
+
     if (event !== "INITIAL_SESSION" && event !== "SIGNED_IN") return;
     if (state.user?.id === session.user.id) return;
 
-    try {
-      setLoginLoading(true);
-      await enterApp(await getUserProfile(session.user));
-    } catch (error) {
-      qs("#auth-message").textContent = error.message;
-    } finally {
-      setLoginLoading(false);
-    }
+    const user = session.user;
+    setTimeout(() => {
+      restoreSession(user);
+    }, 0);
   });
 }
 
 function init() {
   bindEvents();
+  setLoginLoading(false);
   initSupabase();
   fillProductForm();
   fillSupplierForm();
+  syncDiscountInputState();
 
   const authMessage = qs("#auth-message");
   if (state.isSupabaseReady) {

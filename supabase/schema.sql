@@ -69,6 +69,10 @@ create table if not exists sales (
   user_id uuid references auth.users(id),
   customer_name text,
   payment_type text default 'cash',
+  subtotal numeric default 0,
+  discount_type text default 'none',
+  discount_value numeric default 0,
+  discount_amount numeric default 0,
   total numeric default 0
 );
 
@@ -100,8 +104,11 @@ create table if not exists credit_payments (
   id uuid primary key default gen_random_uuid(),
   credit_id uuid references credits(id),
   amount numeric not null,
+  payment_type text default 'cash',
   date timestamptz default now()
 );
+
+alter table credit_payments add column if not exists payment_type text default 'cash';
 
 create table if not exists expenses (
   id uuid primary key default gen_random_uuid(),
@@ -143,6 +150,10 @@ create table if not exists stock_returns (
 -- Migrations for existing deployments (safe to re-run)
 alter table settings add column if not exists low_stock_threshold numeric default 5;
 alter table products add column if not exists image_url text;
+alter table sales add column if not exists subtotal numeric default 0;
+alter table sales add column if not exists discount_type text default 'none';
+alter table sales add column if not exists discount_value numeric default 0;
+alter table sales add column if not exists discount_amount numeric default 0;
 
 -- Row Level Security
 alter table profiles enable row level security;
