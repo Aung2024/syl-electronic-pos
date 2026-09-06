@@ -1,7 +1,9 @@
 [build]
   publish = "."
 
+# Existing files (JS/CSS) are served as-is. Only missing paths fall back to the app shell.
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+  force = false
