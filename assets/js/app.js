@@ -1216,6 +1216,7 @@ function renderSuppliersTable() {
     <tr>
       <td>${supplier.name}</td>
       <td>${supplier.phone || ""}</td>
+      <td>${supplier.address || ""}</td>
       <td class="text-end">
         <button class="btn btn-sm btn-outline-primary" data-edit-supplier="${supplier.id}">Edit</button>
         <button class="btn btn-sm btn-outline-danger" data-delete-supplier="${supplier.id}">Delete</button>
@@ -1233,6 +1234,7 @@ function fillSupplierForm(supplier) {
   qs("#supplier-id").value = supplier?.id || "";
   qs("#supplier-name").value = supplier?.name || "";
   qs("#supplier-phone").value = supplier?.phone || "";
+  qs("#supplier-address").value = supplier?.address || "";
 }
 
 function fillProductForm(product) {
@@ -1251,6 +1253,7 @@ function fillProductForm(product) {
   qs("#product-qty").value = 1;
   qs("#product-margin").value = product?.marginPercent ?? "";
   qs("#product-payment").value = "paid";
+  qs("#product-payment-type").value = "cash";
   qs("#product-new-supplier").value = "";
   qs("#product-image").value = "";
   setProductImagePreview(product?.imageUrl || "");
@@ -1343,7 +1346,8 @@ async function saveProduct(event) {
         batchCogs,
         cogsPerUnit,
         total,
-        paymentStatus: qs("#product-payment").value
+        paymentStatus: qs("#product-payment").value,
+        paymentType: qs("#product-payment-type").value || "cash"
       });
 
       if (purchase.paymentStatus === "payable") {
@@ -1583,7 +1587,7 @@ function renderPurchases() {
       <td>${productById[purchase.productId] || purchase.productName || "-"}</td>
       <td class="text-end">${Number(purchase.qty || 0).toLocaleString()}</td>
       <td class="text-end">${money(purchase.total)}</td>
-      <td>${purchase.paymentStatus || "paid"}</td>
+      <td>${purchase.paymentStatus || "paid"}${purchase.paymentStatus === "paid" && purchase.paymentType ? ` · ${paymentTypeLabel(purchase.paymentType)}` : ""}</td>
     </tr>
   `).join("") || `<tr><td colspan="6" class="text-muted">No purchases yet.</td></tr>`;
 }
@@ -1677,8 +1681,7 @@ function reportData(period = "month") {
     expenseTotal,
     receivableTotal,
     payableTotal,
-    stockValue,
-    cashFlow: salesTotal - purchaseTotal - expenseTotal
+    stockValue
   };
 }
 
@@ -1767,7 +1770,7 @@ function renderReportDetails(report) {
     purchase.productName || "-",
     `<span class="text-end d-block">${Number(purchase.qty || 0).toLocaleString()}</span>`,
     `<span class="text-end d-block">${money(purchase.total)}</span>`,
-    purchase.paymentStatus || "-"
+    `${purchase.paymentStatus || "-"}${purchase.paymentType ? ` · ${paymentTypeLabel(purchase.paymentType)}` : ""}`
   ]);
 
   const expenseRows = report.expenses.map((expense) => [
@@ -1824,7 +1827,6 @@ async function exportReportExcel() {
       ["Receivable balance", excelMoney(report.summary.receivableTotal)],
       ["Payable balance", excelMoney(report.summary.payableTotal)],
       ["Stock value", excelMoney(report.summary.stockValue)],
-      ["Cash flow", excelMoney(report.summary.cashFlow)],
       [],
       ["Sales count", report.sales.length],
       ["Sale items count", report.saleItems.length],
@@ -1861,7 +1863,7 @@ async function exportReportExcel() {
     ]);
 
     appendExcelSheet(workbook, XLSX, "Purchases", [
-      ["Date", "Supplier", "Product", "Qty", "Unit cost (MMK)", "Batch COGS (MMK)", "Total (MMK)", "Payment"],
+      ["Date", "Supplier", "Product", "Qty", "Unit cost (MMK)", "Batch COGS (MMK)", "Total (MMK)", "Payment", "Payment type"],
       ...report.purchases.map((purchase) => [
         new Date(purchase.date).toLocaleDateString(),
         purchase.supplierName || "",
@@ -1870,7 +1872,8 @@ async function exportReportExcel() {
         excelMoney(purchase.unitCost),
         excelMoney(purchase.batchCogs),
         excelMoney(purchase.total),
-        purchase.paymentStatus || ""
+        purchase.paymentStatus || "",
+        paymentTypeLabel(purchase.paymentType)
       ])
     ]);
 
@@ -1917,7 +1920,6 @@ function renderReports() {
     metricCard("Credit to receive", data.receivableTotal),
     metricCard("Credit to pay", data.payableTotal),
     metricCard("Expenses report", data.expenseTotal),
-    metricCard("Cash flow", data.cashFlow),
     `<div class="col-sm-6 col-xl-3"><div class="metric"><span>Sales count</span><strong>${report.sales.length}</strong></div></div>`
   ].join("");
 
@@ -2131,7 +2133,8 @@ function bindEvents() {
     const supplierId = qs("#supplier-id").value;
     const payload = {
       name: qs("#supplier-name").value.trim(),
-      phone: qs("#supplier-phone").value.trim()
+      phone: qs("#supplier-phone").value.trim(),
+      address: qs("#supplier-address").value.trim()
     };
     if (supplierId) payload.id = supplierId;
     else payload.createdAt = nowIso();

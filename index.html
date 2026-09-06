@@ -219,6 +219,16 @@
                     </select>
                   </div>
                 </div>
+                <div class="row g-3">
+                  <div class="col-6">
+                    <label class="form-label" for="product-payment-type">Payment type</label>
+                    <select id="product-payment-type" class="form-select">
+                      <option value="cash">Cash</option>
+                      <option value="kpay">KPay</option>
+                      <option value="kbz">KBZ Mobile Banking</option>
+                    </select>
+                  </div>
+                </div>
                 <div id="new-supplier-wrap">
                   <label class="form-label" for="product-new-supplier">New supplier name</label>
                   <input id="product-new-supplier" class="form-control" placeholder="Enter supplier name">
@@ -423,6 +433,7 @@
                 <h3 class="h5">Supplier</h3>
                 <input id="supplier-name" class="form-control" placeholder="Supplier name" required>
                 <input id="supplier-phone" class="form-control" placeholder="Phone">
+                <textarea id="supplier-address" class="form-control" rows="2" placeholder="Address"></textarea>
                 <div class="d-flex gap-2">
                   <button class="btn btn-primary flex-fill" type="submit">Save Supplier</button>
                   <button id="reset-supplier-form" class="btn btn-outline-secondary" type="button">Reset</button>
@@ -432,7 +443,7 @@
             <div class="col-lg-8">
               <div class="panel table-responsive">
                 <table class="table align-middle">
-                  <thead><tr><th>Name</th><th>Phone</th><th></th></tr></thead>
+                  <thead><tr><th>Name</th><th>Phone</th><th>Address</th><th></th></tr></thead>
                   <tbody id="suppliers-body"></tbody>
                 </table>
               </div>
@@ -519,7 +530,7 @@
           <div class="page-title">
             <div>
               <p class="eyebrow">Reports</p>
-              <h2>Sales, Purchase, Stock, Credit, Expenses & Cash Flow</h2>
+              <h2>Sales, Purchase, Stock, Credit & Expenses</h2>
             </div>
           </div>
           <div class="panel">
@@ -641,6 +652,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
-    <script type="module" src="assets/js/app.js?v=20250905creditpay"></script>
+    <script type="module" src="assets/js/app.js?v=20250906nocashflow"></script>
   </body>
 </html>

@@ -26,8 +26,11 @@ create table if not exists suppliers (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   phone text,
+  address text,
   created_at timestamptz default now()
 );
+
+alter table suppliers add column if not exists address text;
 
 create table if not exists products (
   id uuid primary key default gen_random_uuid(),
@@ -59,8 +62,11 @@ create table if not exists purchases (
   batch_cogs numeric default 0,
   cogs_per_unit numeric default 0,
   total numeric default 0,
-  payment_status text default 'paid'
+  payment_status text default 'paid',
+  payment_type text default 'cash'
 );
+
+alter table purchases add column if not exists payment_type text default 'cash';
 
 create table if not exists sales (
   id uuid primary key default gen_random_uuid(),
