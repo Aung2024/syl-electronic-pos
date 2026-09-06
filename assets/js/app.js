@@ -1,5 +1,4 @@
 import { supabaseConfig, demoUser } from "./supabase-config.js";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const TABLE_BY_COLLECTION = {
   users: "profiles",
@@ -2206,6 +2205,7 @@ function bindEvents() {
   qs("#report-period").addEventListener("change", renderReports);
 }
 
+<<<<<<< Updated upstream
 async function restoreSession(user) {
   if (!user || state.handlingLogin) return;
   if (state.user?.id === user.id) return;
@@ -2227,7 +2227,11 @@ async function restoreSession(user) {
 }
 
 function initSupabase() {
+=======
+async function initSupabase() {
+>>>>>>> Stashed changes
   if (!state.isSupabaseReady) return;
+  const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2.49.1");
   supabase = createClient(supabaseConfig.url, supabaseConfig.anonKey);
 
   // Keep the callback sync and defer async work. Awaiting Supabase queries
